@@ -1,4 +1,4 @@
-precision mediump float;
+precision highp float;
 varying vec2 v_texCoord;
 uniform float u_time;  // 外部传入的时间驱动变量（单位：秒）
 uniform vec2 u_resolution; // 外部传入的手机屏幕实际分辨率 (width, height)
@@ -53,7 +53,7 @@ vec3 blendOverlay(vec3 base, vec3 blend) {
 void main() {
     vec2 uv = v_texCoord;
     float speedMultiplier = 1.5;
-    float t = u_time * speedMultiplier;
+    float t = mod(u_time * speedMultiplier, 314.159265);
     float aspect = u_resolution.x / u_resolution.y;
 
     // ==========================================

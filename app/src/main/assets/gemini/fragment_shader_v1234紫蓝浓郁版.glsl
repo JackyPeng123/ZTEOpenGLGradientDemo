@@ -1,4 +1,4 @@
-precision mediump float;
+precision highp float;
 varying vec2 v_texCoord;
 uniform float u_time;  // 外部传入的时间驱动变量
 uniform vec2 u_resolution; // 手机屏幕实际分辨率
@@ -60,7 +60,7 @@ vec3 evaluateFourColor(vec2 uv_corr, float aspect, vec2 p1, vec2 p2, vec2 p3, ve
 void main() {
     vec2 uv = v_texCoord;
     float speedMultiplier = 1.3; // 逼近视频里的流动速率
-    float t = u_time * speedMultiplier;
+    float t = mod(u_time * speedMultiplier, 314.159265);
     float aspect = u_resolution.x / u_resolution.y;
 
     // ==========================================

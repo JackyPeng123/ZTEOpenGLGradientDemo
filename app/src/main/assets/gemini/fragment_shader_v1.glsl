@@ -1,4 +1,4 @@
-precision mediump float;
+precision highp float;
 varying vec2 v_texCoord;
 uniform float u_time;  // External time uniform (seconds)
 uniform vec2 u_resolution; // External screen resolution (width, height)
@@ -15,7 +15,7 @@ vec2 fullScreenWiggle(float time, float freq, vec2 seed) {
 
 void main() {
     vec2 uv = v_texCoord;
-    float t = u_time * 1.5; // Apply the speed multiplier
+    float t = mod(u_time * 1.5, 314.159265); // Apply the speed multiplier
 
     // 1. Core Change: Generate unique, full-screen paths for each color.
     // There are NO MORE static base points. The motion is total.
