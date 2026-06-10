@@ -1,0 +1,44 @@
+precision highp float;
+
+varying vec2 v_texCoord;
+uniform sampler2D u_texture;     // 背景底图纹理
+uniform vec2 u_resolution;
+uniform float u_time;
+
+uniform float u_glowIntensity;
+uniform float u_glowRadius;
+
+void main() {
+    // 【核心修复】：将纹理坐标的 Y 轴反转，纠正 FBO 带来的上下颠倒
+    vec2 correctedUV = vec2(v_texCoord.x, 1.0 - v_texCoord.y);
+
+    // 根据分辨率计算纹素步长
+    vec2 st = vec2(1.0) / u_resolution;
+    vec2 radius = st * (u_glowRadius + sin(u_time * 4.0) * (u_glowRadius * 0.3));
+
+    // ⚠️ 注意：下面的所有 texture2D 采样，全部改用纠正后的 correctedUV 坐标
+    vec3 c00 = texture2D(u_texture, correctedUV + vec2(-radius.x, -radius.y)).rgb;
+    vec3 c10 = texture2D(u_texture, correctedUV + vec2(0.0,       -radius.y)).rgb;
+    vec3 c20 = texture2D(u_texture, correctedUV + vec2(radius.x,  -radius.y)).rgb;
+
+    vec3 c01 = texture2D(u_texture, correctedUV + vec2(-radius.x, 0.0)).rgb;
+    vec3 c11 = texture2D(u_texture, correctedUV).rgb; // 中心点
+    vec3 c21 = texture2D(u_texture, correctedUV + vec2(radius.x,  0.0)).rgb;
+
+    vec3 c02 = texture2D(u_texture, correctedUV + vec2(-radius.x, radius.y)).rgb;
+    vec3 c12 = texture2D(u_texture, correctedUV + vec2(0.0,        radius.y)).rgb;
+    vec3 c22 = texture2D(u_texture, correctedUV + vec2(radius.x,   radius.y)).rgb;
+
+    // Sobel 梯度计算保持不变
+    vec3 h = -c00 - 2.0 * c10 - c20 + c02 + 2.0 * c12 + c22;
+    vec3 v = -c00 - 2.0 * c01 - c02 + c20 + 2.0 * c21 + c22;
+    vec3 edge = sqrt(h * h + v * v);
+
+    edge.r = smoothstep(0.15, 0.6, edge.r);
+    edge.g = smoothstep(0.15, 0.6, edge.g);
+    edge.b = smoothstep(0.15, 0.6, edge.b);
+
+    vec3 glowResult = edge * c11 * u_glowIntensity;
+
+    gl_FragColor = vec4(glowResult, 1.0);
+}

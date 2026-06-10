@@ -1,10 +1,12 @@
 precision highp float;
 
 varying vec2 v_texCoord;
-uniform sampler2D u_texture;       // 纹理单元 0：底图图片 [cite: 1]
-uniform sampler2D u_maskTexture;   // 纹理单元 1：动态生成的 Mask 纹理
+uniform sampler2D u_texture;       // 纹理 0：底图图片 [cite: 1]
+uniform sampler2D u_maskTexture;   // 纹理 1：动态 Mask 流体
+uniform sampler2D u_glowTexture;   // 纹理 2：新增的独立边缘发光纹理
 uniform float u_alpha;             // 动态透明度 (0.15 ~ 0.50)
 
+// AE 强光混合模式 (Hard Light)
 vec3 blendHardLight(vec3 base, vec3 blend) {
     vec3 result;
     result.r = blend.r < 0.5 ? (2.0 * base.r * blend.r) : (1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r));
@@ -16,11 +18,15 @@ vec3 blendHardLight(vec3 base, vec3 blend) {
 void main() {
     vec4 baseTex = texture2D(u_texture, v_texCoord); // [cite: 1]
     vec4 maskTex = texture2D(u_maskTexture, v_texCoord);
+    vec4 glowTex = texture2D(u_glowTexture, v_texCoord);
 
-    // 进行 AE 强光混合
+    // 1. 中间层：底图与 Mask 的强光混合
     vec3 blendedRGB = blendHardLight(baseTex.rgb, maskTex.rgb);
+    vec3 mixLayer = mix(baseTex.rgb, blendedRGB, u_alpha);
 
-    // 根据透明度混合
-    vec3 finalColor = mix(baseTex.rgb, blendedRGB, u_alpha);
+    // 2. 最上层：叠加独立生成的发光边缘 (采用 AE 屏幕 Screen 模式避免色彩过载爆白)
+    // 如果想要极度明亮的电竞发光感，可以改成：vec3 finalColor = mixLayer + glowTex.rgb; (即 AE 的 Add 模式)
+    vec3 finalColor = 1.0 - (1.0 - mixLayer) * (1.0 - glowTex.rgb);
+
     gl_FragColor = vec4(finalColor, baseTex.a);
 }
