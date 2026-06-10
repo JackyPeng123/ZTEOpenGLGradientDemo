@@ -58,10 +58,10 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         texCoordBuffer.position(0);
 
         // 批量读入 4 个着色器
-        vertexShaderSource = loadShaderFast("gemini/vertex_shader.txt");
-        maskShaderSource = loadShaderFast("gemini/mask1_fragment_shader.txt");
-        glowShaderSource = loadShaderFast("gemini/glow_edge_fragment_shader.txt");
-        finalShaderSource = loadShaderFast("gemini/final_blend_fragment_shader.txt");
+        vertexShaderSource = loadShaderFast("vertex_shader.txt");
+        maskShaderSource = loadShaderFast("mask1_fragment_shader.txt");
+        glowShaderSource = loadShaderFast("glow_edge_fragment_shader.txt");
+        finalShaderSource = loadShaderFast("final_blend_fragment_shader.txt");
     }
 
     public void setBitmap(Bitmap bitmap) {
@@ -215,6 +215,9 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         float pingpong = Math.abs((float) Math.sin(progress * Math.PI / 2.0));
         float currentAlpha = 0.15f + (0.50f - 0.15f) * pingpong;
         GLES20.glUniform1f(finalAlphaHandle, currentAlpha);
+
+        int finalTimeHandle = GLES20.glGetUniformLocation(finalProgram, "u_time");
+        GLES20.glUniform1f(finalTimeHandle, time);
 
         drawQuad(GLES20.glGetAttribLocation(finalProgram, "a_position"), GLES20.glGetAttribLocation(finalProgram, "a_texCoord"));
     }
