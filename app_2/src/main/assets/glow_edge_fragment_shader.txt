@@ -37,7 +37,6 @@ float turbulentSmoothFBM(in vec2 p, float ev) {
     mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
 
     for (int i = 0; i < 3; ++i) {
-        // 微调空间层移动权重，使流动更具有方向感
         vec2 evOffset = vec2(sin(ev * 0.4 * frequency), cos(ev * 0.6 * frequency)) * 1.3;
         float n = safeNoise(p * frequency + evOffset);
         float ridge = abs(n * 2.0 - 1.0);
@@ -72,27 +71,29 @@ void main() {
     float v = -c00 - 2.0 * c01 - c02 + c20 + 2.0 * c21 + c22;
     float edgeMask = sqrt(h * h + v * v);
 
+    // 收紧边缘，只留主要干道
     edgeMask = smoothstep(0.40, 0.60, edgeMask);
 
     // ==========================================
-    // 2. 核心流速校准：兼顾精致大斑块与 1 秒内的明晰位移
+    // 2. 核心压制：极致缩小光斑面积、缩减光斑数量
     // ==========================================
-    // 【黄金阈值】：提升至 0.85。现在光斑的横向挪动速度大幅加快
-    // 配合 300ms 的呼吸，每一次亮起和熄灭之间，亮斑都会向前明显推移、断裂或重组
+    // 保持 1 秒内可抓取位移的演化流速
     float evolution = u_time * 0.85;
 
-    // 保持大块面离散斑块尺寸（卡在 7.0 上下）
+    // 固定大尺寸分形基底
     float currentSize = (u_glowRadius > 1.0) ? (u_glowRadius * 1.5) : 7.0;
     vec2 uv = correctedUV * currentSize;
 
     float n = turbulentSmoothFBM(uv, evolution);
-
-    // AE 风格参数映射与极高对比度截断
     n = 1.0 - n;
-    n = (n - 0.65) * 4.0 + 0.37;
+
+    // 【优化调整点 1】：平移点由 0.65 提升至 0.72。大面积灰色转化为死黑，数量暴减！
+    n = (n - 0.72) * 4.5 + 0.37;
 
     float fractalNoise = smoothstep(0.10, 0.90, n);
-    fractalNoise = pow(fractalNoise, 4.5);
+
+    // 【优化调整点 2】：指数由 4.5 提升至 7.0。边缘极速收窄，单块光斑面积缩成精致小点！
+    fractalNoise = pow(fractalNoise, 7.0);
     fractalNoise = clamp(fractalNoise, 0.0, 1.0);
 
     // ==========================================
