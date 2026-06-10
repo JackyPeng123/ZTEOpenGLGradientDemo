@@ -1,1 +1,4 @@
+//魔法写真的动效
 include ':app'
+//魔法修图的动效
+include ':app_2'
