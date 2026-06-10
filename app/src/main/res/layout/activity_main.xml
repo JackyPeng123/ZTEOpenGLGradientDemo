@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@android:color/holo_red_dark">
+
+    <cn.nubia.redmagickyi.achievement.libgemini.GradientSurfaceView
+        android:id="@+id/surfaceView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!--    <cn.nubia.redmagickyi.achievement.libgemini.GradientTextureView-->
+    <!--        android:id="@+id/textureView"-->
+    <!--        android:layout_width="match_parent"-->
+    <!--        android:layout_height="match_parent" />-->
+
+    <!--    <TextView-->
+    <!--        android:layout_width="wrap_content"-->
+    <!--        android:layout_height="wrap_content"-->
+    <!--        android:text="测试测试测试测试测试测试测试"-->
+    <!--        android:layout_gravity="center"/>-->
+</FrameLayout>
