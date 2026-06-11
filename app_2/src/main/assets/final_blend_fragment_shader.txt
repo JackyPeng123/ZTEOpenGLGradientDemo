@@ -56,7 +56,8 @@ void main() {
     float finalGlowAlpha = mix(0.15, 1.0, breathingProgress);
 
     // 计算最终发光颜色（3.0 为曝光强度系数，可根据视觉表现微调）
-    vec3 glowColor = vec3(1.0, 1.0, 1.0) * glowTex.r * 3.0 * finalGlowAlpha;
+    //vec3 glowColor = vec3(1.0, 1.0, 1.0) * glowTex.r * 3.0 * finalGlowAlpha;
+    vec3 glowColor = vec3(1.0, 1.0, 1.0) * glowTex.r * 1.0;
 
     // 严格的 AE ADD 相加模式合成
     vec3 finalColor = mixLayer + glowColor;
