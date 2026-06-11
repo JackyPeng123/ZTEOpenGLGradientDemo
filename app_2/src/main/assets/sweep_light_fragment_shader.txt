@@ -1,0 +1,110 @@
+precision highp float;
+varying vec2 v_texCoord;
+uniform float u_time;          // 注入时间（单位：秒）
+uniform vec2 u_resolution;     // 画布分辨率 (如 1080.0, 1920.0)
+
+// ==========================================
+// 1. 三次贝塞尔曲线求解器 (0.10, 0.0, 0.0, 1.0)
+// ==========================================
+float cubicBezier(float x) {
+    float t = x;
+    // 使用牛顿迭代法求解 x(t) = 0.3 * (1-t)^2 * t + t^3
+    for(int i = 0; i < 3; i++) {
+        float t2 = t * t;
+        float t3 = t2 * t;
+        float invT = 1.0 - t;
+        float invT2 = invT * invT;
+        float f = 0.3 * invT2 * t + t3 - x;
+        float df = 0.3 * (invT2 - 2.0 * t * invT) + 3.0 * t2;
+        t -= f / (df + 1e-5); // +1e-5 防止除零异常
+    }
+    // y(t) = 3t^2 - 2t^3，恰好等同于 glsl 内置的 smoothstep 曲线
+    return smoothstep(0.0, 1.0, t);
+}
+
+void main() {
+    // 将时间转换为毫秒进行计算
+    float timeMs = u_time * 1000.0;
+    //if (timeMs <= 2000.0) {
+    //    return;
+    //} else {
+    //   timeMs = timeMs - 2000.0;
+    //}
+
+    //测试循环就这么打开这堆注释
+    //float periodMs = 2500.0;
+    //timeMs = mod(u_time * 1000.0, periodMs);
+
+    float totalDurationMs = 600.0;
+    // 如果在当前周期内超过 600ms，整个动效在该周期结束，返回全透明
+    if (timeMs > totalDurationMs) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+
+    // 如果超过 totalDurationMs，整个动效生命周期结束，返回全透明
+    if (timeMs > totalDurationMs) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+
+    // ==========================================
+    // 2. 动效时间线与速率控制
+    // ==========================================
+    // 蒙版透明度：totalDurationMs 内匀速降到 0%
+    float globalAlpha = 1.0 - clamp(timeMs / 400.0, 0.0, 1.0);
+
+    // 蒙版位移：400ms 内完成，使用拟合的贝塞尔插值
+    float moveRaw = clamp(timeMs / 400.0, 0.0, 1.0);
+    float progress = cubicBezier(moveRaw);
+
+    // ==========================================
+    // 3. 四色渐变静态图层 (自上而下)
+    // ==========================================
+    // 根据 UI 标注提取的近似色彩值
+    vec3 c1 = vec3(0.455, 0.698, 0.910); // 顶部浅蓝
+    vec3 c2 = vec3(0.737, 0.557, 0.929); // 中上浅紫
+    vec3 c3 = vec3(0.173, 0.447, 0.859); // 中下深蓝
+    vec3 c4 = vec3(0.212, 0.149, 0.675); // 底部深紫
+
+    // 假设 Android 纹理系 y=0 为顶部，y=1 为底部
+    float y = 1.0 - v_texCoord.y;
+    vec3 gradColor;
+    if (y < 0.333) {
+        gradColor = mix(c1, c2, y * 3.0);
+    } else if (y < 0.666) {
+        gradColor = mix(c2, c3, (y - 0.333) * 3.0);
+    } else {
+        gradColor = mix(c3, c4, (y - 0.666) * 3.0);
+    }
+
+    // ==========================================
+    // 4. 椭圆蒙版计算与运动轨迹
+    // ==========================================
+    vec2 px = v_texCoord * u_resolution;
+    // 半径策略：画布对角线的一半加 100 冗余，确保终点能完全包住画布
+    float R = length(u_resolution) * 0.5 + 100.0;
+    // dp转px估算 (基于大部分 1080p Android 设备的 density 约等于 3.0)
+    float dp26 = 26.0 * 3.25;
+
+    // 【核心修改点】将起点改为负坐标（-R - dp26），使其位于屏幕底部的外侧
+    float startY = -R - dp26;
+
+    // 运动终点：停在画布正中央
+    float endY = u_resolution.y * 0.5;
+    // 根据贝塞尔进度求当前圆心
+    vec2 center = vec2(u_resolution.x * 0.5, mix(startY, endY, progress));
+    // 计算当前像素到蒙版中心的物理像素距离
+    float dist = length(px - center);
+    // 蒙版羽化：200 像素过渡带 (外侧 -> 内侧边缘)
+    float feather = 200.0;
+    float maskAlpha = smoothstep(R, R - feather, dist);
+
+    // ==========================================
+    // 5. 最终合成与输出
+    // ==========================================
+    float finalAlpha = maskAlpha * globalAlpha;
+
+    // 输出预乘 Alpha 的 RGBA
+    gl_FragColor = vec4(gradColor * finalAlpha * 1.0, finalAlpha);
+}

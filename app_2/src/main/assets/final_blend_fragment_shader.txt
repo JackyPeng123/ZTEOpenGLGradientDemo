@@ -4,6 +4,7 @@ varying vec2 v_texCoord;
 uniform sampler2D u_texture;       // 纹理 0：底图图片
 uniform sampler2D u_maskTexture;   // 纹理 1：动态 Mask 流体
 uniform sampler2D u_glowTexture;   // 纹理 2：稀疏边缘流光 FBO
+uniform sampler2D u_sweepTexture;  // 纹理 3：独立的扫光图层 FBO
 uniform float u_time;              // 注入时间（秒）
 uniform float u_alpha;             // 动态透明度
 
@@ -37,8 +38,14 @@ float getStrictLinearGlowAlpha(float t) {
     return clamp(linearWave, 0.0, 1.0);
 }
 
+// Screen 混合模式函数
+vec3 blendScreen(vec3 base, vec3 blend) {
+    return 1.0 - (1.0 - base) * (1.0 - blend);
+}
+
 void main() {
     vec4 baseTex = texture2D(u_texture, v_texCoord);
+    vec4 sweepTex = texture2D(u_sweepTexture, v_texCoord);
     vec4 maskTex = texture2D(u_maskTexture, v_texCoord);
     vec4 glowTex = texture2D(u_glowTexture, v_texCoord);
 
@@ -61,7 +68,10 @@ void main() {
 
     // 严格的 AE ADD 相加模式合成
     vec3 finalColor = mixLayer + glowColor;
-    finalColor = clamp(finalColor, 0.0, 1.0);
+    finalColor = blendScreen(finalColor, sweepTex.rgb);
 
-    gl_FragColor = vec4(finalColor, baseTex.a);
+    // 如果只想调试扫光，那就打开这里
+    finalColor = blendScreen(baseTex.rgb, sweepTex.rgb);
+
+    gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), baseTex.a);
 }

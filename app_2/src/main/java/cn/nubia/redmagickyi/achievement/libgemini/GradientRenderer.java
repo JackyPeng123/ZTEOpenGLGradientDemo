@@ -18,13 +18,15 @@ import cn.nubia.redmagickyi.achievement.RedmagickyiApplication;
 public class GradientRenderer implements GLSurfaceView.Renderer {
     private static final String TAG = "GradientRenderer";
 
-    // 三个独立的着色器程序
+    // 四个独立的着色器程序
+    private int sweepProgram = 0;
     private int maskProgram = 0;
     private int glowProgram = 0;
     private int finalProgram = 0;
     private long startTime;
 
     private final String vertexShaderSource;
+    private final String sweepShaderSource;
     private final String maskShaderSource;
     private final String glowShaderSource;
     private final String finalShaderSource;
@@ -32,14 +34,15 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private FloatBuffer vertexBuffer;
     private FloatBuffer texCoordBuffer;
 
-    // FBO 阵列：[0] 给 Mask 纹理，[1] 给 Glow 边缘发光纹理
-    private int[] fboIds = new int[2];
-    private int[] fboTextureIds = new int[2];
+    // FBO 阵列：[0] 给 Sweep 纹理，[1] 给 Mask 纹理，  [2] 给 Glow 边缘发光纹理
+    private int[] fboIds = new int[3];
+    private int[] fboTextureIds = new int[3];
 
     // 各 Program 句柄
+    private int sweepTimeHandle, sweepResHandle;
     private int maskTimeHandle, maskResHandle;
     private int glowMaskTexHandle, glowResHandle, glowTimeHandle, glowIntensityHandle, glowRadiusHandle;
-    private int finalTextureHandle, finalMaskTextureHandle, finalGlowTextureHandle, finalAlphaHandle;
+    private int finalTextureHandle, finalSweepTextureHandle, finalMaskTextureHandle, finalGlowTextureHandle, finalAlphaHandle;
 
     private float screenWidth = 1080f;
     private float screenHeight = 1920f;
@@ -57,8 +60,9 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         texCoordBuffer = ByteBuffer.allocateDirect(texCoords.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(texCoords);
         texCoordBuffer.position(0);
 
-        // 批量读入 4 个着色器
+        // 批量读入 5 个着色器
         vertexShaderSource = loadShaderFast("vertex_shader.txt");
+        sweepShaderSource = loadShaderFast("sweep_light_fragment_shader.txt");
         maskShaderSource = loadShaderFast("mask1_fragment_shader.txt");
         glowShaderSource = loadShaderFast("glow_edge_fragment_shader.txt");
         finalShaderSource = loadShaderFast("final_blend_fragment_shader.txt");
@@ -73,6 +77,11 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+        // Pass 0: Sweep Program
+        sweepProgram = createGLProgram(vertexShaderSource, sweepShaderSource);
+        sweepTimeHandle = GLES20.glGetUniformLocation(sweepProgram, "u_time"); //
+        sweepResHandle = GLES20.glGetUniformLocation(sweepProgram, "u_resolution"); //
+
         // Pass 1: Mask Program
         maskProgram = createGLProgram(vertexShaderSource, maskShaderSource);
         maskTimeHandle = GLES20.glGetUniformLocation(maskProgram, "u_time"); //
@@ -89,6 +98,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         // Pass 3: Final Blend Program
         finalProgram = createGLProgram(vertexShaderSource, finalShaderSource);
         finalTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_texture"); //
+        finalSweepTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_sweepTexture");
         finalMaskTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_maskTexture");
         finalGlowTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_glowTexture");
         finalAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_alpha");
@@ -106,16 +116,16 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         this.screenWidth = (float) width;
         this.screenHeight = (float) height;
 
-        // 旋转或尺寸变动时重建双通道 FBO
+        // 旋转或尺寸变动时重建 FBO
         deleteFBOs();
         initFBOs(width, height);
     }
 
     private void initFBOs(int width, int height) {
-        GLES20.glGenTextures(2, fboTextureIds, 0);
-        GLES20.glGenFramebuffers(2, fboIds, 0);
+        GLES20.glGenTextures(3, fboTextureIds, 0);
+        GLES20.glGenFramebuffers(3, fboIds, 0);
 
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 3; i++) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[i]);
             GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, width, height, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
@@ -132,7 +142,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onDrawFrame(GL10 gl) {
-        if (maskProgram == 0 || glowProgram == 0 || finalProgram == 0 || fboIds[0] == 0) return;
+        if (sweepProgram == 0 || maskProgram == 0 || glowProgram == 0 || finalProgram == 0 || fboIds[0] == 0) return;
 
         // 动态加载更新外部 Bitmap 到旧纹理
         synchronized (this) {
@@ -150,9 +160,22 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         float time = (System.currentTimeMillis() - startTime) / 1000.0f;
 
         // ==========================================
-        // PASS 1：渲染流体，并保存至 fboIds[0] (Mask纹理)
+        // PASS 0：渲染扫光，并保存至 fboIds[0] (Sweep纹理)
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[0]);
+        GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
+        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+
+        GLES20.glUseProgram(sweepProgram);
+        GLES20.glUniform1f(sweepTimeHandle, time); // [cite: 3]
+        GLES20.glUniform2f(sweepResHandle, screenWidth, screenHeight); // [cite: 3]
+        drawQuad(GLES20.glGetAttribLocation(sweepProgram, "a_position"), GLES20.glGetAttribLocation(sweepProgram, "a_texCoord")); // [cite: 44]
+
+        // ==========================================
+        // PASS 1：渲染流体，并保存至 fboIds[1] (Mask纹理)
+        // ==========================================
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[1]);
         GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
@@ -163,9 +186,9 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         drawQuad(GLES20.glGetAttribLocation(maskProgram, "a_position"), GLES20.glGetAttribLocation(maskProgram, "a_texCoord")); // [cite: 44]
 
         // ==========================================
-        // PASS 2：【核心修改】查找背景图片的边缘并发光 -> fboIds[1]
+        // PASS 2：【核心修改】查找背景图片的边缘并发光 -> fboIds[2]
         // ==========================================
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[1]);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[2]);
         GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
@@ -199,15 +222,20 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mTextureId);
         GLES20.glUniform1i(finalTextureHandle, 0);
 
-        // 绑定纹理 1：流体 Mask 纹理
+        // 绑定纹理 1：扫光 Sweep 纹理
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[0]); // Pass 1 生成的独立流体纹理
-        GLES20.glUniform1i(finalMaskTextureHandle, 1);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[0]); // Pass 0 生成的独立流体纹理
+        GLES20.glUniform1i(finalSweepTextureHandle, 1);
 
-        // 绑定纹理 2：背景发光 Glow 纹理
+        // 绑定纹理 2：流体 Mask 纹理
         GLES20.glActiveTexture(GLES20.GL_TEXTURE2);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[1]); // Pass 2 生成的背景边缘发光纹理
-        GLES20.glUniform1i(finalGlowTextureHandle, 2);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[1]); // Pass 1 生成的独立流体纹理
+        GLES20.glUniform1i(finalMaskTextureHandle, 2);
+
+        // 绑定纹理 3：背景发光 Glow 纹理
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE3);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[2]); // Pass 2 生成的背景边缘发光纹理
+        GLES20.glUniform1i(finalGlowTextureHandle, 3);
 
         // 计算 15% 到 50% 的流体呼吸曲线 (Pingpong)
         float duration = 1.0f;
@@ -250,12 +278,12 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     private void deleteFBOs() {
         if (fboIds[0] != 0) {
-            GLES20.glDeleteFramebuffers(2, fboIds, 0);
-            fboIds[0] = 0; fboIds[1] = 0;
+            GLES20.glDeleteFramebuffers(3, fboIds, 0);
+            fboIds[0] = 0; fboIds[1] = 0; fboIds[2] = 0;
         }
         if (fboTextureIds[0] != 0) {
-            GLES20.glDeleteTextures(2, fboTextureIds, 0);
-            fboTextureIds[0] = 0; fboTextureIds[1] = 0;
+            GLES20.glDeleteTextures(3, fboTextureIds, 0);
+            fboTextureIds[0] = 0; fboTextureIds[1] = 0; fboTextureIds[2] = 0;
         }
     }
 
@@ -284,6 +312,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     public void onDestroy() {
         deleteFBOs();
+        if (sweepProgram != 0) GLES20.glDeleteProgram(sweepProgram);
         if (maskProgram != 0) GLES20.glDeleteProgram(maskProgram);
         if (glowProgram != 0) GLES20.glDeleteProgram(glowProgram);
         if (finalProgram != 0) GLES20.glDeleteProgram(finalProgram);
