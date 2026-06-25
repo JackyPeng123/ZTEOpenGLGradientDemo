@@ -3,9 +3,10 @@ apply plugin: 'com.android.application'
 android {
     compileSdkVersion 31
     buildToolsVersion "31.0.0"
+    namespace 'cn.nubia.aigeneration.v2'
 
     defaultConfig {
-        applicationId "cn.nubia.redmagickyi.achievement2"
+        applicationId "cn.nubia.aigeneration.v2"
         minSdkVersion 29
         targetSdkVersion 31
         versionCode 30001
@@ -32,4 +33,53 @@ dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation 'androidx.recyclerview:recyclerview:1.0.0'
     implementation 'androidx.appcompat:appcompat:1.1.0'
+}
+
+/**
+ * apk备份及自动安装
+ */
+afterEvaluate {
+    project.tasks.each {
+        if (it.name == "assembleDebug") {
+            it.doLast {
+                File dir = project.getRootProject().getProjectDir();
+                def variant_name = it.name.replace("assemble", "");
+                if (variant_name.contains("Release")) {
+                    variant_name = "/build/intermediates/apk/release";
+                } else {
+                    variant_name = "/build/intermediates/apk/debug";
+                }
+                println("============= $variant_name")
+                //定位到当前out目录
+                def dir_path = project.getProjectDir().getAbsolutePath() + "/" + variant_name;
+
+                File outDirFile = new File(dir_path);
+                outDirFile.eachFile {
+                    def path = it.absolutePath;
+                    def name = it.name;
+                    if (it.name.endsWith(".apk")) {
+                        //找到刚编出来的apk
+                        def short_name = it.name.replace(".apk", "").replace(" ", "_");
+                        def target_dir = new File(project.getProjectDir().getAbsolutePath(), "out/");
+                        def target_apk = new File(target_dir, short_name + "_" + new Date().format("yyyyMMddHHmmss") + ".apk");
+
+                        //拷贝到指定目录，并以约定格式存储
+                        copy {
+                            from path
+                            into target_dir.absolutePath;
+                            rename name, target_apk.name;
+                        }
+
+                        //安装并运行
+                        exec {
+                            def force_stop = "adb shell am force-stop " + "cn.nubia.aigeneration.v2";
+                            def install = "adb install -r -d -t " + target_apk.absolutePath;
+                            println "$force_stop && $install";
+                            commandLine 'cmd', "/c", force_stop + " && " + install;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

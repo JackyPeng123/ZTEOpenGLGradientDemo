@@ -2,3 +2,5 @@
 include ':app'
 //魔法修图的动效
 include ':app_2'
+//AI消除的动效
+include ':app_3'

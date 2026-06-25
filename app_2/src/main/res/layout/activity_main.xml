@@ -11,10 +11,23 @@
         android:src="@mipmap/bg2"
         android:scaleType="fitCenter"/>
 
-    <cn.nubia.redmagickyi.achievement.libgemini.GradientSurfaceView
+    <cn.nubia.aigeneration.v2.libgemini.GradientSurfaceView
         android:id="@+id/surfaceView"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"/>
+
+    <cn.nubia.aigeneration.v2.libgemini.GradientTextureView
+        android:id="@+id/textureView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:visibility="gone"/>
+
+    <cn.nubia.aigeneration.v2.ShimmerTextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="生成中..."
+        android:layout_gravity="center" />
 
 </FrameLayout>
