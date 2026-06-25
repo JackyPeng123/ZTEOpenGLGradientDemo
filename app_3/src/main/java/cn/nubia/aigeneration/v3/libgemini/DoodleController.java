@@ -23,10 +23,8 @@ import cn.nubia.aigeneration.v3.ApplicationContext;
 public class DoodleController {
     private static final String TAG = "DoodleController";
     // ========== 动画控制标志 ==========
-    //控制是否松手后尾巴追逐头部
     private static final boolean ENABLE_CATCHUP_ON_RELEASE = true;
-    //控制是否在静止不动时尾巴追逐头部
-    private static final boolean ENABLE_CATCH_UP_ON_STILL = false;
+    private static final boolean ENABLE_CATCH_UP_ON_STILL = true;
 
     private final GradientRenderer.RenderCallback renderCallback;
     private int viewWidth, viewHeight;
@@ -66,6 +64,23 @@ public class DoodleController {
     private int sweepDurationLoc;
     private int sweepResLoc;
 
+    // ========== 新增：纯色掩码 Shader ==========
+    private int maskProgram;
+    private int maskPositionLoc;
+    private int maskUvLoc;
+    private int maskMvpLoc;
+    private int maskTotalLengthLoc;
+    private int maskStrokeWidthLoc;
+
+    // ========== 新增：全屏边缘描边合成 Shader ==========
+    private int outlineProgram;
+    private int outlinePositionLoc;
+    private int outlineTexCoordLoc;
+    private int outlineMvpLoc;
+    private int outlineTextureLoc;
+    private int outlineTexelSizeLoc;
+    private int outlineColorLoc;
+
     // ========== 离屏 FBO ==========
     private int strokeFboId = -1;
     private int strokeFboTextureId = -1;
@@ -75,22 +90,25 @@ public class DoodleController {
     private int sweepFboId = -1;
     private int sweepFboTextureId = -1;
 
+    // ========== 新增：独立的掩码图层 FBO ==========
+    private int maskFboId = -1;
+    private int maskFboTextureId = -1;
+
     private FloatBuffer quadVertexBuffer;
     private FloatBuffer quadTexCoordBuffer;
     private FloatBuffer sweepQuadTexCoordBuffer; // Y 翻转，匹配 GradientRenderer_e2 的 UV 约定
 
-    // ========== Sweep 动画状态 ==========
-    // 与 GradientRenderer_e2 保持一致:
-    // GENERATING_SWEEP_START_TIMESTAMP = 0f, GENERATING_SWEEP_END_TIMESTAMP = 0.6f
+    // ========== Sweep 动画与描边状态 ==========
     private static final float SWEEP_DURATION = 0.6f; // 秒
-    private boolean isSweepAnimating = false;
+    private volatile boolean isSweepAnimating = false;
     private long sweepStartTime = 0;
+    private volatile boolean isSweepCompleted = false; // 新增：用于精细控制描边图层的显示时机
 
     // ========== 笔画数据 ==========
     private List<Point> currentStroke = new ArrayList<>();
     private List<CompletedStroke> completedStrokes = new CopyOnWriteArrayList<>();
-    private boolean isDrawing = false;
-    private boolean isCatchingUp = false;
+    private volatile boolean isDrawing = false;
+    private volatile boolean isCatchingUp = false;
     private float currentTotalLength = 0f;
 
     // ========== 尾巴追赶动画逻辑 ==========
@@ -120,7 +138,10 @@ public class DoodleController {
                 float elapsed = (SystemClock.elapsedRealtime() - sweepStartTime) / 1000f;
                 if (elapsed > SWEEP_DURATION) {
                     isSweepAnimating = false;
-                    renderCallback.requestRender(); // 最后一帧清理
+                    isSweepCompleted = true;
+                    // 连续请求重绘，确保多缓冲区都能更新到最终的描边图层
+                    renderCallback.requestRender();
+                    handler.postDelayed(() -> renderCallback.requestRender(), 16);
                 } else {
                     renderCallback.requestRender();
                     handler.postDelayed(this, 16);
@@ -147,9 +168,6 @@ public class DoodleController {
                     "    v_texCoord = a_texCoord;\n" +
                     "}\n";
 
-    // 修改: 加入 sweep screen blend，用 stroke alpha 作为遮罩
-    // 与 final_blend_fragment_shader_e2 中 drawGenerating 对 sweep 的处理一致:
-    // refinedFilter + 1.05 亮度 + blendScreen
     private static final String COMPOSITE_FRAGMENT_SRC =
             "precision highp float;\n" +
                     "varying vec2 v_texCoord;\n" +
@@ -193,7 +211,7 @@ public class DoodleController {
                     "uniform float u_stroke_width;\n" +
                     "void main() {\n" +
                     "    float dx = 0.0;\n" +
-                    "    // 计算首尾的圆角距离\n" +
+                    "    // 1. 完美复刻 doodle 源码的首尾圆角坐标映射逻辑\n" +
                     "    if (v_uv.x < u_stroke_width) {\n" +
                     "        dx = (u_stroke_width - v_uv.x) / u_stroke_width;\n" +
                     "    } else if (v_uv.x > u_total_length - u_stroke_width) {\n" +
@@ -201,13 +219,70 @@ public class DoodleController {
                     "    }\n" +
                     "    float dist_to_center = sqrt(dx * dx + v_uv.y * v_uv.y);\n" +
                     "    \n" +
-                    "    // 使用与 doodle_fragment_shader 一致的 wide_shape (sigma=0.35)\n" +
-                    "    // gaussian(x, 0.35) = exp(-(x*x) / (2 * 0.35 * 0.35)) ≈ exp(-4.0816 * x^2)\n" +
-                    "    float shape = exp(-4.0816 * dist_to_center * dist_to_center);\n" +
+                    "    // 2. 核心对齐：Doodle 的高斯白核在 0.52 附近达到饱合并开始向外快速衰减\n" +
+                    "    // 将此半径作为实体路径边界，即可与 Doodle 的视觉粗细完美贴合\n" +
+                    "    float max_radius = 0.52;\n" +
                     "    \n" +
-                    "    // 提取核心区域并赋予 50% 透明度\n" +
-                    "    float alpha = smoothstep(0.2, 0.5, shape) * 0.5;\n" +
+                    "    if (dist_to_center > max_radius) {\n" +
+                    "        discard;\n" +
+                    "    }\n" +
+                    "    \n" +
+                    "    // 3. 消除整体渐变：核心内部（<= 0.50）呈现绝对均匀的 50% 不透明度（0.5）\n" +
+                    "    // 仅在最外侧极窄圈 [0.50, 0.52] 内使用 smoothstep 进行边缘抗锯齿，防止出现毛糙锯齿\n" +
+                    "    float alpha = smoothstep(max_radius, max_radius - 0.02, dist_to_center) * 0.5;\n" +
+                    "    \n" +
+                    "    // 遵循 FBO 预乘混合规范输出\n" +
                     "    gl_FragColor = vec4(alpha, alpha, alpha, alpha);\n" +
+                    "}\n";
+
+    // 新增：掩码片元着色器，剔除外部虚边，输出 1.0 纯白绝对实体掩码
+    private static final String MASK_FRAGMENT_SRC =
+            "precision highp float;\n" +
+                    "varying vec2 v_uv;\n" +
+                    "uniform float u_total_length;\n" +
+                    "uniform float u_stroke_width;\n" +
+                    "void main() {\n" +
+                    "    float dx = 0.0;\n" +
+                    "    if (v_uv.x < u_stroke_width) {\n" +
+                    "        dx = (u_stroke_width - v_uv.x) / u_stroke_width;\n" +
+                    "    } else if (v_uv.x > u_total_length - u_stroke_width) {\n" +
+                    "        dx = (v_uv.x - (u_total_length - u_stroke_width)) / u_stroke_width;\n" +
+                    "    }\n" +
+                    "    float dist_to_center = sqrt(dx * dx + v_uv.y * v_uv.y);\n" +
+                    "    if (dist_to_center > 0.42) discard;\n" + // 根据核心区边界硬切断
+                    "    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n" +
+                    "}\n";
+
+    // 新增：全屏边缘扩张描边着色器（屏幕空间 Dilation），自动跳过内部交叠区
+    private static final String OUTLINE_FRAGMENT_SRC =
+            "precision highp float;\n" +
+                    "varying vec2 v_texCoord;\n" +
+                    "uniform sampler2D u_maskTexture;\n" +
+                    "uniform vec2 u_texelSize;\n" +
+                    "uniform vec4 u_outlineColor;\n" +
+                    "void main() {\n" +
+                    "    float center = texture2D(u_maskTexture, v_texCoord).a;\n" +
+                    "    if (center > 0.5) {\n" +
+                    "        discard;\n" + // 像素内部不着色
+                    "    }\n" +
+                    "    float strokeCount = 0.0;\n" +
+                    "    // 半径为 3 像素的全方位膨胀边缘搜索 (可微调控制外描边粗细)\n" +
+                    "    for (int x = -3; x <= 3; x++) {\n" +
+                    "        for (int y = -3; y <= 3; y++) {\n" +
+                    "            if (x == 0 && y == 0) continue;\n" +
+                    "            vec2 offset = vec2(float(x), float(y)) * u_texelSize;\n" +
+                    "            if (texture2D(u_maskTexture, v_texCoord + offset).a > 0.5) {\n" +
+                    "                strokeCount = 1.0;\n" +
+                    "                break;\n" +
+                    "            }\n" +
+                    "        }\n" +
+                    "        if (strokeCount > 0.5) break;\n" +
+                    "    }\n" +
+                    "    if (strokeCount > 0.5) {\n" +
+                    "        gl_FragColor = u_outlineColor;\n" +
+                    "    } else {\n" +
+                    "        discard;\n" +
+                    "    }\n" +
                     "}\n";
 
     private static class Point {
@@ -257,7 +332,7 @@ public class DoodleController {
         compositeSweepTextureLoc = GLES20.glGetUniformLocation(compositeProgram, "u_sweepTexture");
         compositeSweepAlphaLoc   = GLES20.glGetUniformLocation(compositeProgram, "u_sweepAlpha");
 
-        // 初始化 Sweep Shader（使用 sweep_light_fragment_shader.glsl）
+        // 初始化 Sweep Shader
         String sweepFragSrc = loadShaderFast("sweep_light_fragment_shader.glsl");
         sweepProgram = createGLProgram(COMPOSITE_VERTEX_SRC, sweepFragSrc);
         sweepPositionLoc  = GLES20.glGetAttribLocation(sweepProgram, "a_position");
@@ -267,9 +342,25 @@ public class DoodleController {
         sweepDurationLoc  = GLES20.glGetUniformLocation(sweepProgram, "u_duration");
         sweepResLoc       = GLES20.glGetUniformLocation(sweepProgram, "u_resolution");
 
+        // 新增：初始化 掩码 Shader 变量
+        maskProgram = createGLProgram(PATH_VERTEX_SRC, MASK_FRAGMENT_SRC);
+        maskPositionLoc = GLES20.glGetAttribLocation(maskProgram, "a_position");
+        maskUvLoc = GLES20.glGetAttribLocation(maskProgram, "a_uv");
+        maskMvpLoc = GLES20.glGetUniformLocation(maskProgram, "uMVPMatrix");
+        maskTotalLengthLoc = GLES20.glGetUniformLocation(maskProgram, "u_total_length");
+        maskStrokeWidthLoc = GLES20.glGetUniformLocation(maskProgram, "u_stroke_width");
+
+        // 新增：初始化 全屏边缘描边 Shader 变量
+        outlineProgram = createGLProgram(COMPOSITE_VERTEX_SRC, OUTLINE_FRAGMENT_SRC);
+        outlinePositionLoc = GLES20.glGetAttribLocation(outlineProgram, "a_position");
+        outlineTexCoordLoc = GLES20.glGetAttribLocation(outlineProgram, "a_texCoord");
+        outlineMvpLoc = GLES20.glGetUniformLocation(outlineProgram, "uMVPMatrix");
+        outlineTextureLoc = GLES20.glGetUniformLocation(outlineProgram, "u_maskTexture");
+        outlineTexelSizeLoc = GLES20.glGetUniformLocation(outlineProgram, "u_texelSize");
+        outlineColorLoc = GLES20.glGetUniformLocation(outlineProgram, "u_outlineColor");
+
         float[] quadVerts = {-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f};
         float[] quadTexs  = { 0f,  0f, 1f,  0f,  0f, 1f, 1f, 1f};
-        // 与 GradientRenderer_e2 一致的 Y 翻转 texCoord (y=0 在屏幕顶部)
         float[] sweepTexs = { 0f,  0f, 1f,  0f,  0f, 1f, 1f, 1f};
 
         quadVertexBuffer = ByteBuffer.allocateDirect(quadVerts.length * 4)
@@ -290,6 +381,7 @@ public class DoodleController {
         this.viewHeight = height;
         createStrokeFBO(width, height);
         createSweepFBO(width, height);
+        createMaskFBO(width, height); // 新增：构建独立的 Mask 层
     }
 
     public void onDestroy() {
@@ -297,10 +389,13 @@ public class DoodleController {
         handler.removeCallbacks(sweepRenderRunnable);
         destroyStrokeFBO();
         destroySweepFBO();
+        destroyMaskFBO(); // 新增：清理 FBO 资源
         if (doodleProgram != 0) GLES20.glDeleteProgram(doodleProgram);
         if (pathProgram != 0) GLES20.glDeleteProgram(pathProgram);
         if (compositeProgram != 0) GLES20.glDeleteProgram(compositeProgram);
         if (sweepProgram != 0) GLES20.glDeleteProgram(sweepProgram);
+        if (maskProgram != 0) GLES20.glDeleteProgram(maskProgram); // 新增
+        if (outlineProgram != 0) GLES20.glDeleteProgram(outlineProgram); // 新增
     }
 
     private void createStrokeFBO(int width, int height) {
@@ -368,12 +463,38 @@ public class DoodleController {
         sweepFboTextureId = -1;
     }
 
-    /**
-     * 启动 Sweep 扫光动画，与 GradientRenderer_e2 保持一致:
-     * - 持续 0.6 秒 (GENERATING_SWEEP_END_TIMESTAMP - GENERATING_SWEEP_START_TIMESTAMP)
-     * - alpha 从 1.0 线性衰减到 0.0 (getSweepAlpha 逻辑)
-     * - sweep shader 内部也有 globalAlpha 和 easeOutQuart 缓出运动
-     */
+    // 新增：构建独立的 Mask FBO 像素阵列空间
+    private void createMaskFBO(int width, int height) {
+        destroyMaskFBO();
+        int[] texIds = new int[1];
+        GLES20.glGenTextures(1, texIds, 0);
+        maskFboTextureId = texIds[0];
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskFboTextureId);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA,
+                width, height, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+
+        int[] fboIds = new int[1];
+        GLES20.glGenFramebuffers(1, fboIds, 0);
+        maskFboId = fboIds[0];
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, maskFboId);
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, maskFboTextureId, 0);
+
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+    }
+
+    private void destroyMaskFBO() {
+        if (maskFboId != -1) GLES20.glDeleteFramebuffers(1, new int[]{maskFboId}, 0);
+        if (maskFboTextureId != -1) GLES20.glDeleteTextures(1, new int[]{maskFboTextureId}, 0);
+        maskFboId = -1;
+        maskFboTextureId = -1;
+    }
+
     private void startSweepAnimation() {
         isSweepAnimating = true;
         sweepStartTime = SystemClock.elapsedRealtime();
@@ -422,9 +543,9 @@ public class DoodleController {
             case MotionEvent.ACTION_DOWN:
                 isDrawing = true;
                 isCatchingUp = false;
+                isSweepCompleted = false; // 新增：开始新的一笔画时，重置并隐藏上一轮的描边层
                 handler.removeCallbacks(renderRunnable);
 
-                // 新笔画开始时停止上一次的 sweep 动画
                 isSweepAnimating = false;
                 handler.removeCallbacks(sweepRenderRunnable);
 
@@ -477,7 +598,7 @@ public class DoodleController {
                         handler.post(renderRunnable);
                     } else {
                         cancelCurrentStroke();
-                        startSweepAnimation(); // 如果不追赶，则立即触发
+                        startSweepAnimation();
                     }
                 }
                 break;
@@ -485,88 +606,8 @@ public class DoodleController {
         return true;
     }
 
-    /**
-     * 使用 Catmull-Rom 算法对触控轨迹进行曲线平滑插值
-     * 并根据当前屏幕视口比例重新精准计算顶点的累加物理长度
-     */
-    private List<Point> smoothPoints(List<Point> rawPoints, float aspect) {
-        if (rawPoints == null || rawPoints.size() < 2) {
-            return rawPoints;
-        }
-
-        List<Point> smoothed = new ArrayList<>();
-        int numPoints = rawPoints.size();
-
-        // 局部临时类，用于存放纯坐标，避免高频创建带有复杂业务属性的 Point 对象
-        class TempCoord {
-            float x, y;
-            TempCoord(float x, float y) { this.x = x; this.y = y; }
-        }
-        List<TempCoord> tempCoords = new ArrayList<>();
-
-        // 遍历所有原始线段进行插值
-        for (int i = 0; i < numPoints - 1; i++) {
-            Point p1 = rawPoints.get(i);
-            Point p2 = rawPoints.get(i + 1);
-
-            // 边界控制点处理
-            Point p0 = (i == 0) ? p1 : rawPoints.get(i - 1);
-            Point p3 = (i == numPoints - 2) ? p2 : rawPoints.get(i + 2);
-
-            // 计算当前线段在屏幕上的等效物理距离，动态决定插值点的密度
-            float dx = p2.x - p1.x;
-            float dy = (p2.y - p1.y) * aspect;
-            float dist = (float) Math.hypot(dx, dy);
-
-            // 阈值调优：每段长约 0.015 采样一个点。
-            // 数值越小越丝滑但顶点越多；数值越大越接近直角。0.015f 是性能与视觉平衡的黄金点。
-            int steps = Math.max(1, (int) (dist / 0.015f));
-
-            for (int j = 0; j < steps; j++) {
-                float t = j / (float) steps;
-                float t2 = t * t;
-                float t3 = t2 * t;
-
-                // 标准 Catmull-Rom 曲线矩阵公式
-                float x = 0.5f * ((2f * p1.x) +
-                        (-p0.x + p2.x) * t +
-                        (2f * p0.x - 5f * p1.x + 4f * p2.x - p3.x) * t2 +
-                        (-p0.x + 3f * p1.x - 3f * p2.x + p3.x) * t3);
-
-                float y = 0.5f * ((2f * p1.y) +
-                        (-p0.y + p2.y) * t +
-                        (2f * p0.y - 5f * p1.y + 4f * p2.y - p3.y) * t2 +
-                        (-p0.y + 3f * p1.y - 3f * p2.y + p3.y) * t3);
-
-                tempCoords.add(new TempCoord(x, y));
-            }
-        }
-
-        // 补上最后一个原始终点
-        Point lastRaw = rawPoints.get(numPoints - 1);
-        tempCoords.add(new TempCoord(lastRaw.x, lastRaw.y));
-
-        // 第二阶段：基于弯曲后的全新曲线，重新从 0 累加精准的 lengthFromStart
-        float accumulatedLength = 0f;
-        smoothed.add(new Point(tempCoords.get(0).x, tempCoords.get(0).y, 0f));
-
-        for (int i = 1; i < tempCoords.size(); i++) {
-            TempCoord prev = tempCoords.get(i - 1);
-            TempCoord curr = tempCoords.get(i);
-
-            float dx = curr.x - prev.x;
-            float dy = (curr.y - prev.y) * aspect;
-            accumulatedLength += (float) Math.hypot(dx, dy);
-
-            smoothed.add(new Point(curr.x, curr.y, accumulatedLength));
-        }
-
-        return smoothed;
-    }
-
     public void cancelCurrentStroke() {
         handler.removeCallbacks(renderRunnable);
-        // 外部取消时也停止 sweep
         handler.removeCallbacks(sweepRenderRunnable);
         isSweepAnimating = false;
 
@@ -586,11 +627,6 @@ public class DoodleController {
         renderCallback.requestRender();
     }
 
-    /**
-     * 尾巴追赶完成时调用，不停止 sweep 动画。
-     * 与 cancelCurrentStroke 的区别在于：尾巴自然追完是松手流程的一部分，
-     * sweep 应继续播放到 0.6s 结束。
-     */
     private void finishCurrentStroke() {
         handler.removeCallbacks(renderRunnable);
         synchronized (currentStroke) {
@@ -615,27 +651,12 @@ public class DoodleController {
     public void drawCurrentStrokeEffect(float[] mvpMatrix) {
         if (strokeFboId == -1) return;
 
-        // 提前计算视口长宽比
-        float aspect = getModelAspect(mvpMatrix);
-
         List<Point> renderPoints = null;
         float renderTotalLength = 0f;
         synchronized (currentStroke) {
             if (currentStroke.size() >= 2) {
                 renderPoints = new ArrayList<>(currentStroke);
-            }
-        }
-
-        // ==================================================
-        // 核心修改 1：对当前正在绘制/追赶的笔画进行曲线平滑
-        // ==================================================
-        if (renderPoints != null) {
-            renderPoints = smoothPoints(renderPoints, aspect);
-            if (renderPoints.size() >= 2) {
-                // 用平滑后更精准的曲线总长度更新渲染总长度
-                renderTotalLength = renderPoints.get(renderPoints.size() - 1).lengthFromStart;
-            } else {
-                renderPoints = null;
+                renderTotalLength = currentTotalLength;
             }
         }
 
@@ -678,6 +699,8 @@ public class DoodleController {
         }
         // ==================================================
 
+        float aspect = getModelAspect(mvpMatrix);
+
         // ================= 渲染笔画到 Stroke FBO =================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, strokeFboId);
         GLES20.glViewport(0, 0, strokeFboWidth, strokeFboHeight);
@@ -693,25 +716,14 @@ public class DoodleController {
         GLES20.glUniformMatrix4fv(pathMvpLoc, 1, false, mvpMatrix, 0);
         GLES20.glUniform1f(pathStrokeWidthLoc, STROKE_WIDTH);
 
-        // ==================================================
-        // 核心修改 2：对已完成的历史笔画在更新顶点时也进行平滑
-        // ==================================================
         for (CompletedStroke cs : completedStrokes) {
             if (cs.vertexBuffer == null || Math.abs(cs.aspect - aspect) > 0.01f) {
-                List<Point> smoothedHistory = smoothPoints(cs.points, aspect);
-                if (smoothedHistory.size() >= 2) {
-                    cs.totalLength = smoothedHistory.get(smoothedHistory.size() - 1).lengthFromStart;
-                    cs.vertexBuffer = generateVertexBuffer(smoothedHistory, aspect);
-                    cs.numVertices = smoothedHistory.size() * 2;
-                } else {
-                    cs.numVertices = 0;
-                }
+                cs.vertexBuffer = generateVertexBuffer(cs.points, aspect);
                 cs.aspect = aspect;
+                cs.numVertices = cs.points.size() * 2;
             }
-            if (cs.numVertices > 0) {
-                GLES20.glUniform1f(pathTotalLengthLoc, cs.totalLength);
-                drawBuffer(cs.vertexBuffer, cs.numVertices, pathPositionLoc, pathUvLoc);
-            }
+            GLES20.glUniform1f(pathTotalLengthLoc, cs.totalLength);
+            drawBuffer(cs.vertexBuffer, cs.numVertices, pathPositionLoc, pathUvLoc);
         }
 
         FloatBuffer currentBuffer = null;
@@ -750,17 +762,36 @@ public class DoodleController {
             }
         }
 
-        // ================= Composite 合成到屏幕 =================
+        // ================= 新增：渲染纯实体色块到 Mask FBO =================
+        if (isSweepCompleted && maskFboId != -1) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, maskFboId);
+            GLES20.glViewport(0, 0, strokeFboWidth, strokeFboHeight);
+            GLES20.glClearColor(0f, 0f, 0f, 0f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+
+            GLES20.glUseProgram(maskProgram);
+            GLES20.glUniformMatrix4fv(maskMvpLoc, 1, false, mvpMatrix, 0);
+            GLES20.glUniform1f(maskStrokeWidthLoc, STROKE_WIDTH);
+
+            // 将所有完成的历史轨迹合并填充到扁平 Mask 图层，消除线段相交引发的几何重叠
+            for (CompletedStroke cs : completedStrokes) {
+                if (cs.vertexBuffer != null) {
+                    GLES20.glUniform1f(maskTotalLengthLoc, cs.totalLength);
+                    drawBuffer(cs.vertexBuffer, cs.numVertices, maskPositionLoc, maskUvLoc);
+                }
+            }
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        }
+
+        // ================= Composite 原有核心合并层渲染到屏幕 =================
         compositeToScreen(sweepAlpha);
+
+        // ================= 新增：如果扫光完结，叠加全新的外轮廓描边图层到屏幕 =================
+        if (isSweepCompleted && maskFboId != -1) {
+            compositeOutlineToScreen();
+        }
     }
 
-    /**
-     * 将 sweep 扫光渲染到 Sweep FBO。
-     * 与 GradientRenderer_e2 的 PASS 0 逻辑一致:
-     * - u_time = 已过时间(秒)
-     * - u_duration = 0.6(秒)
-     * - u_resolution = 屏幕分辨率
-     */
     private void renderSweepToFBO(float sweepTime) {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, sweepFboId);
         GLES20.glViewport(0, 0, strokeFboWidth, strokeFboHeight);
@@ -789,6 +820,43 @@ public class DoodleController {
         GLES20.glDisableVertexAttribArray(sweepTexCoordLoc);
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+    }
+
+    // 新增：利用 Mask FBO 纹理计算并显示外圈不自重叠描边
+    private void compositeOutlineToScreen() {
+        GLES20.glViewport(0, 0, viewWidth, viewHeight);
+        GLES20.glUseProgram(outlineProgram);
+
+        GLES20.glEnable(GLES20.GL_BLEND);
+        // 标准 Alpha 混合
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
+
+        float[] identity = new float[16];
+        Matrix.setIdentityM(identity, 0);
+        GLES20.glUniformMatrix4fv(outlineMvpLoc, 1, false, identity, 0);
+
+        // 传递倒数像素尺寸，通知着色器屏幕像素步长
+        GLES20.glUniform2f(outlineTexelSizeLoc, 1.0f / viewWidth, 1.0f / viewHeight);
+
+        // 设置描边颜色：例如纯白色描边 vec4(1.0, 1.0, 1.0, 1.0)，可根据业务随意调整
+        GLES20.glUniform4f(outlineColorLoc, 1.0f, 1.0f, 1.0f, 1.0f);
+
+        // 绑定 Mask FBO 纹理
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskFboTextureId);
+        GLES20.glUniform1i(outlineTextureLoc, 0);
+
+        GLES20.glEnableVertexAttribArray(outlinePositionLoc);
+        GLES20.glVertexAttribPointer(outlinePositionLoc, 2, GLES20.GL_FLOAT, false, 0, quadVertexBuffer);
+
+        GLES20.glEnableVertexAttribArray(outlineTexCoordLoc);
+        GLES20.glVertexAttribPointer(outlineTexCoordLoc, 2, GLES20.GL_FLOAT, false, 0, quadTexCoordBuffer);
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+
+        GLES20.glDisableVertexAttribArray(outlinePositionLoc);
+        GLES20.glDisableVertexAttribArray(outlineTexCoordLoc);
+        GLES20.glDisable(GLES20.GL_BLEND);
     }
 
     private FloatBuffer generateVertexBuffer(List<Point> points, float aspect) {
@@ -856,12 +924,6 @@ public class DoodleController {
         GLES20.glDisableVertexAttribArray(uvLoc);
     }
 
-    /**
-     * 将 Stroke FBO + Sweep FBO 合成到屏幕。
-     * Sweep 通过 screen blend 叠加，并以 Stroke FBO 的 alpha 作为遮罩,
-     * 使扫光仅在涂鸦路径上可见。
-     * 与 final_blend_fragment_shader_e2 中 drawGenerating 对 sweep 的处理方式一致。
-     */
     private void compositeToScreen(float sweepAlpha) {
         GLES20.glViewport(0, 0, viewWidth, viewHeight);
         GLES20.glUseProgram(compositeProgram);
@@ -873,12 +935,10 @@ public class DoodleController {
         Matrix.setIdentityM(identity, 0);
         GLES20.glUniformMatrix4fv(compositeMvpLoc, 1, false, identity, 0);
 
-        // 绑定 Stroke 纹理 (纹理单元 0)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, strokeFboTextureId);
         GLES20.glUniform1i(compositeTextureLoc, 0);
 
-        // 绑定 Sweep 纹理 (纹理单元 1)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, sweepFboTextureId != -1 ? sweepFboTextureId : 0);
         GLES20.glUniform1i(compositeSweepTextureLoc, 1);
