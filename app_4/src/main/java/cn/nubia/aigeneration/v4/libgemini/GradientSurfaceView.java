@@ -15,6 +15,10 @@ import androidx.annotation.NonNull;
 public class GradientSurfaceView extends GLSurfaceView implements Renderer {
     private Renderer renderer;
 
+    // 【新增】暂存圆角参数与当前计算出来的绘制区间
+    private float mCornerRadius = 0f;
+    private int mDrawLeft, mDrawTop, mDrawWidth, mDrawHeight;
+
     public GradientSurfaceView(Context context) {
         super(context);
         init();
@@ -26,27 +30,39 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
     }
 
     private void init() {
-        // 设置OpenGL ES 2.0上下文
         setEGLContextClientVersion(2);
-        // 让 GLSurfaceView 知道它需要一个包含 Alpha 通道的颜色缓冲区 (RGBA_8888)
         setEGLConfigChooser(8, 8, 8, 8, 16, 0);
-        // 将 SurfaceView 的窗口顶层设置为透明
         getHolder().setFormat(PixelFormat.TRANSLUCENT);
-        // 设置渲染器
-        setRenderer(this.renderer = getRenderer());
-        // 持续渲染模式（自动调用onDrawFrame）
+
+        Renderer customRenderer = getRenderer();
+        // 【修改】在此处直接捕获并关联 Renderer 抛出的坐标变换事件
+        if (customRenderer instanceof GradientRenderer) {
+            ((GradientRenderer) customRenderer).setOnDrawRectChangedListener(new GradientRenderer.OnDrawRectChangedListener() {
+                @Override
+                public void onDrawRectChanged(final int left, final int top, final int width, final int height) {
+                    // 确保切回 UI 主线程安全设置圆角
+                    post(new Runnable() {
+                        @Override
+                        public void run() {
+                            mDrawLeft = left;
+                            mDrawTop = top;
+                            mDrawWidth = width;
+                            mDrawHeight = height;
+                            applyRoundCornerInternal();
+                        }
+                    });
+                }
+            });
+        }
+
+        setRenderer(this.renderer = customRenderer);
         setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
-        //控制
         getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
-            public void surfaceCreated(@NonNull SurfaceHolder holder) {
-
-            }
+            public void surfaceCreated(@NonNull SurfaceHolder holder) {}
 
             @Override
-            public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
-
-            }
+            public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {}
 
             @Override
             public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
@@ -55,7 +71,6 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
                 }
             }
         });
-        //马上暂停
         pause();
     }
 
@@ -75,13 +90,26 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
 
     @Override
     public void setRoundCorner(float radius) {
-        setOutlineProvider(new ViewOutlineProvider() {
+        this.mCornerRadius = radius;
+        post(new Runnable() {
             @Override
-            public void getOutline(View view, Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+            public void run() {
+                applyRoundCornerInternal();
             }
         });
-        setClipToOutline(true);
+    }
+
+    // 【新增】合并刷新圆角，将边缘完美贴合在图片居中边缘
+    private void applyRoundCornerInternal() {
+        if (mCornerRadius > 0 && mDrawWidth > 0 && mDrawHeight > 0) {
+            setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(mDrawLeft, mDrawTop, mDrawLeft + mDrawWidth, mDrawTop + mDrawHeight, mCornerRadius);
+                }
+            });
+            setClipToOutline(true);
+        }
     }
 
     @Override

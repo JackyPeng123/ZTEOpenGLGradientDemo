@@ -24,38 +24,24 @@ import cn.nubia.aigeneration.v4.ApplicationContext;
 
 public class GradientRenderer implements GLSurfaceView.Renderer {
     private static final String TAG = "GradientRenderer";
-    //状态【待机中】不对外开放，仅作为初始状态
     private static final int STATE_IDEL = 0;
-    //状态【生成中】、状态【已生成】
     public static final int STATE_GENERATING = 1, STATE_GENERATED = 2;
     @Retention(RetentionPolicy.SOURCE) @IntDef({STATE_IDEL, STATE_GENERATING, STATE_GENERATED}) @interface State {}
 
-    //扫光动画开始时间（秒）
     private static final float GENERATING_SWEEP_START_TIMESTAMP = 0f;
-    //扫光动画结束时间（秒）
     private static final float GENERATING_SWEEP_END_TIMESTAMP = GENERATING_SWEEP_START_TIMESTAMP + 0.6f;
-    //入场动画--渐变背景开始时间（秒）
     private static final float GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP = 0.25f;
-    //入场动画--渐变背景结束时间（秒）
     private static final float GENERATING_GRADIENT_BG_ENTER_END_TIMESTAMP = GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP + 0.5f;
-    //入场动画--描边开始时间（秒）
     private static final float GENERATING_GLOW_ENTER_START_TIMESTAMP = 0.5f;
-    //入场动画--描边结束时间（秒）
     private static final float GENERATING_GLOW_ENTER_END_TIMESTAMP = GENERATING_GLOW_ENTER_START_TIMESTAMP + 0.3f;
 
-    //退场动画--渐变背景开始时间（秒）
     private static final float GENERATING_GRADIENT_BG_EXIT_START_TIMESTAMP = 0f;
-    //退场动画--渐变背景结束时间（秒）
     private static final float GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP = GENERATING_GRADIENT_BG_EXIT_START_TIMESTAMP + 0.15f;
-    //退场动画--描边开始时间（秒）
     private static final float GENERATING_GLOW_EXIT_START_TIMESTAMP = 0f;
-    //退场动画--描边结束时间（秒）
     private static final float GENERATING_GLOW_EXIT_END_TIMESTAMP = GENERATING_GLOW_EXIT_START_TIMESTAMP + 0.15f;
 
-    // 动画状态
     private volatile @State int state = STATE_IDEL, stateTemp = STATE_IDEL;
 
-    // 着色器程序
     private int generatingSweepProgram = 0;
     private int generatingGradientBgProgram = 0;
     private int generatingGlowProgram = 0;
@@ -70,29 +56,39 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private FloatBuffer vertexBuffer;
     private FloatBuffer texCoordBuffer;
 
-    // FBO 阵列：[0] Sweep, [1] GradientBg, [2] Glow
     private int[] fboIds = new int[3];
     private int[] fboTextureIds = new int[3];
 
     private float[] generatedPixelOffset = new float[4];
 
-    // 各 Program 句柄
     private int generatingSweepTimeHandle, generatingSweepDurationHandler, generatingSweepResHandle;
     private int generatingGradientBgTimeHandle, generatingGradientBgResHandle;
     private int generatingGlowGradientBgTexHandle, generatingGlowResHandle, generatingGlowTimeHandle, generatingGlowIntensityHandle, generatingGlowRadiusHandle;
     private int finalGeneratingBitmapTextureHandle, finalGeneratingSweepTextureHandle, finalGeneratingSweepAlphaHandle, finalGeneratingGradientBgTextureHandle, finalGeneratingGradientBgAlphaHandle, finalGeneratingGlowTextureHandle, finalGeneratingGlowAlphaHandle;
-    private int finalResHandle; // 分辨率句柄
+    private int finalResHandle;
 
     private float screenWidth = 1080f;
     private float screenHeight = 1920f;
+
+    // 【新增】内部自适应裁剪区域和尺寸改变标志位
+    private int drawX = 0, drawY = 0, drawW = 0, drawH = 0;
+    private boolean mSizeChanged = false;
+
+    // 【新增】用于通知 View 层刷新圆角 Outline 的回调
+    public interface OnDrawRectChangedListener {
+        void onDrawRectChanged(int left, int top, int width, int height);
+    }
+    private OnDrawRectChangedListener mOnDrawRectChangedListener;
+    public void setOnDrawRectChangedListener(OnDrawRectChangedListener listener) {
+        this.mOnDrawRectChangedListener = listener;
+    }
 
     private long startTime;
 
     private Bitmap mGeneratingBitmap;
     private boolean mGeneratingBitmapChanged = false;
-    private int mGeneratingBitmapTextureId = -1; // 底图 A
+    private int mGeneratingBitmapTextureId = -1;
 
-    // 记录退场动画起始透明度
     private float exitStartGradientBgAlpha = 0f;
     private float exitStartGlowAlpha = 0f;
 
@@ -105,7 +101,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         texCoordBuffer = ByteBuffer.allocateDirect(texCoords.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(texCoords);
         texCoordBuffer.position(0);
 
-        // 批量读入着色器
         vertexShaderSource = loadShaderFast("vertex_shader.glsl");
         generatingSweepShaderSource = loadShaderFast("generating_sweep_light_fragment_shader.glsl");
         generatingGradientBgShaderSource = loadShaderFast("generating_gradient_background_fragment_shader.glsl");
@@ -117,6 +112,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         synchronized (this) {
             this.mGeneratingBitmap = bitmap;
             this.mGeneratingBitmapChanged = true;
+            this.mSizeChanged = true; // 【修改】传入图片时触发重新计算区域
         }
     }
 
@@ -131,18 +127,15 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-        // Pass 0: Sweep Program
         generatingSweepProgram = createGLProgram(vertexShaderSource, generatingSweepShaderSource);
         generatingSweepTimeHandle = GLES20.glGetUniformLocation(generatingSweepProgram, "u_time");
         generatingSweepDurationHandler = GLES20.glGetUniformLocation(generatingSweepProgram, "u_duration");
         generatingSweepResHandle = GLES20.glGetUniformLocation(generatingSweepProgram, "u_resolution");
 
-        // Pass 1: GradientBg Program
         generatingGradientBgProgram = createGLProgram(vertexShaderSource, generatingGradientBgShaderSource);
         generatingGradientBgTimeHandle = GLES20.glGetUniformLocation(generatingGradientBgProgram, "u_time");
         generatingGradientBgResHandle = GLES20.glGetUniformLocation(generatingGradientBgProgram, "u_resolution");
 
-        // Pass 2: Glow Program
         generatingGlowProgram = createGLProgram(vertexShaderSource, generatingGlowShaderSource);
         generatingGlowGradientBgTexHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_gradientBgTexture");
         generatingGlowResHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_resolution");
@@ -150,7 +143,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         generatingGlowIntensityHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_glowIntensity");
         generatingGlowRadiusHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_glowRadius");
 
-        // Pass 3: Final Blend Program
         finalProgram = createGLProgram(vertexShaderSource, finalShaderSource);
         finalGeneratingBitmapTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_bitmapTexture");
         finalGeneratingSweepTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_sweepTexture");
@@ -159,14 +151,12 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         finalGeneratingGradientBgAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_gradientBgAlpha");
         finalGeneratingGlowTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowTexture");
         finalGeneratingGlowAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowAlpha");
-        finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution"); // 获取分辨率句柄
+        finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution");
 
-        // 生成底图的纹理句柄
         int[] textures = new int[1];
         GLES20.glGenTextures(1, textures, 0);
         mGeneratingBitmapTextureId = textures[0];
 
-        // GL 上下文重建后，强制重新上传 Bitmap 到新纹理，规避纹理丢失导致的黑屏
         synchronized (this) {
             if (mGeneratingBitmap != null) {
                 mGeneratingBitmapChanged = true;
@@ -178,10 +168,9 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     public void onSurfaceChanged(GL10 gl, int width, int height) {
         this.screenWidth = (float) width;
         this.screenHeight = (float) height;
-
-        // 旋转或尺寸变动时重建 FBO
-        deleteFBOs();
-        initFBOs(width, height);
+        synchronized (this) {
+            this.mSizeChanged = true; // 【修改】容器改变时重新计算区域
+        }
     }
 
     private void initFBOs(int width, int height) {
@@ -205,9 +194,52 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onDrawFrame(GL10 gl) {
-        if (generatingSweepProgram == 0 || generatingGradientBgProgram == 0 || generatingGlowProgram == 0 || finalProgram == 0 || fboIds[0] == 0) return;
+        // 【修改】核心自适应逻辑：动态按 fitCenter 计算最终的 drawRect
+        synchronized (this) {
+            if (mSizeChanged && mGeneratingBitmap != null && screenWidth > 0 && screenHeight > 0) {
+                int bitmapW = mGeneratingBitmap.getWidth();
+                int bitmapH = mGeneratingBitmap.getHeight();
 
-        // 动态加载更新外部 Bitmap 到旧纹理
+                float containerRatio = screenWidth / screenHeight;
+                float bitmapRatio = (float) bitmapW / bitmapH;
+                float targetW, targetH;
+
+                if (bitmapRatio > containerRatio) {
+                    targetW = screenWidth;
+                    targetH = screenWidth / bitmapRatio;
+                } else {
+                    targetW = screenHeight * bitmapRatio;
+                    targetH = screenHeight;
+                }
+
+                int newDrawX = Math.round((screenWidth - targetW) / 2f);
+                int newDrawY = Math.round((screenHeight - targetH) / 2f);
+                int newDrawW = Math.round(targetW);
+                int newDrawH = Math.round(targetH);
+
+                if (newDrawX != drawX || newDrawY != drawY || newDrawW != drawW || newDrawH != drawH) {
+                    this.drawX = newDrawX;
+                    this.drawY = newDrawY;
+                    this.drawW = newDrawW;
+                    this.drawH = newDrawH;
+
+                    // 仅在真实渲染区间确定后重建刚好匹配大小的 FBO 节省内存
+                    deleteFBOs();
+                    if (drawW > 0 && drawH > 0) {
+                        initFBOs(drawW, drawH);
+                    }
+
+                    // 回调通知外层 View 去主线程刷新圆角裁剪
+                    if (mOnDrawRectChangedListener != null) {
+                        mOnDrawRectChangedListener.onDrawRectChanged(drawX, drawY, drawW, drawH);
+                    }
+                }
+                mSizeChanged = false;
+            }
+        }
+
+        if (generatingSweepProgram == 0 || generatingGradientBgProgram == 0 || generatingGlowProgram == 0 || finalProgram == 0 || drawW == 0 || drawH == 0 || fboIds[0] == 0) return;
+
         synchronized (this) {
             if (mGeneratingBitmapChanged && mGeneratingBitmap != null) {
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
@@ -220,45 +252,44 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
             }
         }
 
-        //已经在当前状态保持了X秒
         float keepSecond = onStateChanged();
 
         // ==========================================
-        // PASS 0：渲染扫光，并保存至 fboIds[0] (Sweep纹理)
+        // PASS 0：渲染扫光 -> 视口完全匹配图片实际尺寸 drawW, drawH
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[0]);
-        GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
+        GLES20.glViewport(0, 0, drawW, drawH);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
         GLES20.glUseProgram(generatingSweepProgram);
         GLES20.glUniform1f(generatingSweepTimeHandle, keepSecond - GENERATING_SWEEP_START_TIMESTAMP);
         GLES20.glUniform1f(generatingSweepDurationHandler, GENERATING_SWEEP_END_TIMESTAMP - GENERATING_SWEEP_START_TIMESTAMP);
-        GLES20.glUniform2f(generatingSweepResHandle, screenWidth, screenHeight);
+        GLES20.glUniform2f(generatingSweepResHandle, (float) drawW, (float) drawH);
         drawQuad(GLES20.glGetAttribLocation(generatingSweepProgram, "a_position"), GLES20.glGetAttribLocation(generatingSweepProgram, "a_texCoord"));
 
         // ==========================================
-        // PASS 1：渲染流体，并保存至 fboIds[1] (GradientBg纹理)
+        // PASS 1：渲染流体 -> 视口完全匹配图片实际尺寸 drawW, drawH
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[1]);
-        GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
+        GLES20.glViewport(0, 0, drawW, drawH);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
         GLES20.glUseProgram(generatingGradientBgProgram);
         GLES20.glUniform1f(generatingGradientBgTimeHandle, keepSecond - GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP);
-        GLES20.glUniform2f(generatingGradientBgResHandle, screenWidth, screenHeight);
+        GLES20.glUniform2f(generatingGradientBgResHandle, (float) drawW, (float) drawH);
         drawQuad(GLES20.glGetAttribLocation(generatingGradientBgProgram, "a_position"), GLES20.glGetAttribLocation(generatingGradientBgProgram, "a_texCoord"));
 
         // ==========================================
-        // PASS 2：查找背景图片的边缘并发光 -> fboIds[2]
-        // ==========================================、
+        // PASS 2：查找边缘 -> 视口完全匹配图片实际尺寸 drawW, drawH
+        // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[2]);
-        GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
+        GLES20.glViewport(0, 0, drawW, drawH);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
         GLES20.glUseProgram(generatingGlowProgram);
-        GLES20.glUniform2f(generatingGlowResHandle, screenWidth, screenHeight);
+        GLES20.glUniform2f(generatingGlowResHandle, (float) drawW, (float) drawH);
         GLES20.glUniform1f(generatingGlowTimeHandle, keepSecond - GENERATING_GLOW_ENTER_START_TIMESTAMP);
         GLES20.glUniform1f(generatingGlowIntensityHandle, 3.0f);
         GLES20.glUniform1f(generatingGlowRadiusHandle, 4.0f);
@@ -266,39 +297,39 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
         GLES20.glUniform1i(generatingGlowGradientBgTexHandle, 0);
-
         drawQuad(GLES20.glGetAttribLocation(generatingGlowProgram, "a_position"), GLES20.glGetAttribLocation(generatingGlowProgram, "a_texCoord"));
 
         // ==========================================
-        // PASS 3：最终合成 -> 屏幕
+        // PASS 3：最终合成 -> 映射居中到全屏窗口上
         // ==========================================
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); // 解绑回主屏幕
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+
+        // 1. 先把全屏画布刷成透明
         GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
+        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
 
+        // 2. 转换坐标系坐标（Android 顶端为 0，GL 底端为 0），精准锁定居中区域
+        int glDrawY = (int) screenHeight - drawY - drawH;
+        GLES20.glViewport(drawX, glDrawY, drawW, drawH);
+
         GLES20.glUseProgram(finalProgram);
+        GLES20.glUniform2f(finalResHandle, (float) drawW, (float) drawH);
 
-        // 传入屏幕分辨率给最终合成着色器
-        GLES20.glUniform2f(finalResHandle, screenWidth, screenHeight);
-
-        // 绑定纹理 0：背景底图 A
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
         GLES20.glUniform1i(finalGeneratingBitmapTextureHandle, 0);
 
-        // 绑定纹理 1：扫光 Sweep 纹理
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[0]);
         GLES20.glUniform1i(finalGeneratingSweepTextureHandle, 1);
         GLES20.glUniform1f(finalGeneratingSweepAlphaHandle, getSweepAlpha(state, keepSecond));
 
-        // 绑定纹理 2：流体 GradientBg 纹理
         GLES20.glActiveTexture(GLES20.GL_TEXTURE2);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[1]);
         GLES20.glUniform1i(finalGeneratingGradientBgTextureHandle, 2);
         GLES20.glUniform1f(finalGeneratingGradientBgAlphaHandle, getGradientBgAlpha(state, keepSecond));
 
-        // 绑定纹理 3：背景发光 Glow 纹理
         GLES20.glActiveTexture(GLES20.GL_TEXTURE3);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[2]);
         GLES20.glUniform1i(finalGeneratingGlowTextureHandle, 3);
