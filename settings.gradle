@@ -4,3 +4,5 @@ include ':app'
 include ':app_2'
 //AI消除的动效
 include ':app_3'
+//辅助构图的动效
+include ':app_4'
