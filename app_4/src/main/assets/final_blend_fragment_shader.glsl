@@ -9,14 +9,14 @@ uniform sampler2D u_generating_glowTexture;
 uniform float u_generating_sweepAlpha;
 uniform float u_generating_gradientBgAlpha;
 uniform float u_generating_glowAlpha;
-uniform vec2 u_resolution;
-uniform float u_borderFadeOutProgress; // 控制虚线框消失的进度 (0.0~1.0)
-uniform float u_gridFadeOutProgress;   // 控制辅助线消失的进度 (0.0~1.0)
+uniform vec4 u_generated_offset;     // x: left, y: top, z: right, w: bottom
+uniform float u_generated_fadeInProgress;  // 0.0 ~ 1.0 动画进度
+uniform float u_generated_outsideFadeOutProgress;//控制区域外图片消失的进度
+uniform float u_generated_borderFadeOutProgress; // 控制虚线框消失的进度 (0.0~1.0)
+uniform float u_generated_gridFadeOutProgress;   // 控制辅助线消失的进度 (0.0~1.0)
 
-uniform vec4 u_generatedOffset;     // x: left, y: top, z: right, w: bottom
-uniform float u_generatedProgress;  // 0.0 ~ 1.0 动画进度
+uniform vec2 u_resolution;
 uniform float u_density;            // 屏幕密度 dp -> px
-uniform float u_outsideFadeProgress;//控制区域外图片消失的进度
 
 // 四次方缓出 (Ease-Out Quart)
 float easeOut(float x) {
@@ -97,16 +97,16 @@ vec3 drawGenerating(vec4 bitmapTex, vec3 finalColor) {
 
 // 已生成 的动效
 vec4 drawGenerated(vec3 finalColor, float baseAlpha) {
-    if (u_generatedProgress <= 0.0) {
+    if (u_generated_fadeInProgress <= 0.0) {
         return vec4(finalColor, baseAlpha);
     }
 
     vec2 pixelCoord = v_texCoord * u_resolution;
 
-    float minX = u_generatedOffset.x;
-    float minY = u_generatedOffset.y;
-    float maxX = 1.0 - u_generatedOffset.z;
-    float maxY = 1.0 - u_generatedOffset.w;
+    float minX = u_generated_offset.x;
+    float minY = u_generated_offset.y;
+    float maxX = 1.0 - u_generated_offset.z;
+    float maxY = 1.0 - u_generated_offset.w;
 
     float minPxX = minX * u_resolution.x;
     float minPxY = minY * u_resolution.y;
@@ -121,17 +121,15 @@ vec4 drawGenerated(vec3 finalColor, float baseAlpha) {
     float finalAlpha = baseAlpha;
 
     if (isOutside) {
-            // 【优化】让原有的 27% 黑色遮罩强度也随着淡出进度同步递减，防止过渡期间出现颜色突兀
-            float maskAlpha = 0.27 * u_generatedProgress * (1.0 - u_outsideFadeProgress);
-            finalColor = mix(finalColor, vec3(0.0, 0.0, 0.0), maskAlpha);
-
-            // 随着进度将整个区域外像素的透明度匀速降至 0
-            finalAlpha = baseAlpha * (1.0 - u_outsideFadeProgress);
-
-            // 【安全防线】当进度达到或超过 1.0 时，死死锁定透明度为 0
-            if (u_outsideFadeProgress >= 1.0) {
-                finalAlpha = 0.0;
-            }
+        // 【优化】让原有的 27% 黑色遮罩强度也随着淡出进度同步递减，防止过渡期间出现颜色突兀
+        float maskAlpha = 0.27 * u_generated_fadeInProgress * (1.0 - u_generated_outsideFadeOutProgress);
+        finalColor = mix(finalColor, vec3(0.0, 0.0, 0.0), maskAlpha);
+        // 随着进度将整个区域外像素的透明度匀速降至 0
+        finalAlpha = baseAlpha * (1.0 - u_generated_outsideFadeOutProgress);
+        // 【安全防线】当进度达到或超过 1.0 时，死死锁定透明度为 0
+        if (u_generated_outsideFadeOutProgress >= 1.0) {
+            finalAlpha = 0.0;
+        }
     } else {
         // 区域内部：逻辑保持不变
         float borderPxWidth = 1.5 * u_density;
@@ -158,8 +156,8 @@ vec4 drawGenerated(vec3 finalColor, float baseAlpha) {
 
         if (isBorder) {
             if (mod(edgeDistance, dashPeriod) < dashLength) {
-                // 【修改】原透明度上限为 0.60，乘上 (1.0 - u_borderFadeOutProgress) 让其渐渐归零
-                float borderAlpha = 0.60 * u_generatedProgress * (1.0 - u_borderFadeOutProgress);
+                // 【修改】原透明度上限为 0.60，乘上 (1.0 - u_generated_borderFadeOutProgress) 让其渐渐归零
+                float borderAlpha = 0.60 * u_generated_fadeInProgress * (1.0 - u_generated_borderFadeOutProgress);
                 finalColor = mix(finalColor, vec3(1.0, 1.0, 1.0), borderAlpha);
             }
         } else {
@@ -177,8 +175,8 @@ vec4 drawGenerated(vec3 finalColor, float baseAlpha) {
                           abs(pixelCoord.y - gy2) < halfGridWidth;
 
             if (isGrid) {
-                // 【修改】原透明度上限为 0.27，乘上 (1.0 - u_gridFadeOutProgress) 让其渐渐归零
-                float gridAlpha = 0.27 * u_generatedProgress * (1.0 - u_gridFadeOutProgress);
+                // 【修改】原透明度上限为 0.27，乘上 (1.0 - u_generated_gridFadeOutProgress) 让其渐渐归零
+                float gridAlpha = 0.27 * u_generated_fadeInProgress * (1.0 - u_generated_gridFadeOutProgress);
                 finalColor = mix(finalColor, vec3(1.0, 1.0, 1.0), gridAlpha);
             }
         }

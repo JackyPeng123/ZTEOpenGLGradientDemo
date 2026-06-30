@@ -65,13 +65,8 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private int generatingGradientBgTimeHandle, generatingGradientBgResHandle;
     private int generatingGlowGradientBgTexHandle, generatingGlowResHandle, generatingGlowTimeHandle, generatingGlowIntensityHandle, generatingGlowRadiusHandle;
     private int finalGeneratingBitmapTextureHandle, finalGeneratingSweepTextureHandle, finalGeneratingSweepAlphaHandle, finalGeneratingGradientBgTextureHandle, finalGeneratingGradientBgAlphaHandle, finalGeneratingGlowTextureHandle, finalGeneratingGlowAlphaHandle;
-    private int finalResHandle;
-    private int finalGeneratedOffsetHandle;
-    private int finalGeneratedProgressHandle;
-    private int finalDensityHandle;
-    private int finalOutsideFadeProgressHandle;
-    private int finalBorderFadeOutProgressHandle;
-    private int finalGridFadeOutProgressHandle;
+    private int finalGeneratedOffsetHandle, finalGeneratedFadeInProgressHandle, finalGeneratedOutsideFadeOutProgressHandle, finalGeneratedBorderFadeOutProgressHandle, finalGeneratedGridFadeOutProgressHandle;
+    private int finalResHandle, finalDensityHandle;
 
     private float screenWidth = 1080f;
     private float screenHeight = 1920f;
@@ -157,14 +152,15 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         finalGeneratingGradientBgAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_gradientBgAlpha");
         finalGeneratingGlowTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowTexture");
         finalGeneratingGlowAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowAlpha");
-        finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution");
 
-        finalGeneratedOffsetHandle = GLES20.glGetUniformLocation(finalProgram, "u_generatedOffset");
-        finalGeneratedProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_generatedProgress");
+        finalGeneratedOffsetHandle = GLES20.glGetUniformLocation(finalProgram, "u_generated_offset");
+        finalGeneratedFadeInProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_generated_fadeInProgress");
+        finalGeneratedOutsideFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_generated_outsideFadeOutProgress");
+        finalGeneratedBorderFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_generated_borderFadeOutProgress");
+        finalGeneratedGridFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_generated_gridFadeOutProgress");
+
+        finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution");
         finalDensityHandle = GLES20.glGetUniformLocation(finalProgram, "u_density");
-        finalOutsideFadeProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_outsideFadeProgress");
-        finalBorderFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_borderFadeOutProgress");
-        finalGridFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_gridFadeOutProgress");
 
         int[] textures = new int[1];
         GLES20.glGenTextures(1, textures, 0);
@@ -325,7 +321,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         float currentDrawW = drawW;
         float currentDrawH = drawH;
 
-        float outsideFadeProgress = 0f; // 【新增】用于记录区域外的淡出进度
+        float outsideFadeOutProgress = 0f; // 【新增】用于记录区域外的淡出进度
 
         if (state == STATE_GENERATED) {
             float timeSinceGenerated = keepSecond;
@@ -366,7 +362,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
             // 2. 【新增】处理区域外淡出
             if (timeSinceGenerated > fadeDelay) {
-                outsideFadeProgress = Math.min(1.0f, (timeSinceGenerated - fadeDelay) / fadeDuration);
+                outsideFadeOutProgress = Math.min(1.0f, (timeSinceGenerated - fadeDelay) / fadeDuration);
             }
         }
 
@@ -414,11 +410,11 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
             }
         }
 
-        GLES20.glUniform1f(finalGeneratedProgressHandle, generatedProgress);
-        GLES20.glUniform1f(finalOutsideFadeProgressHandle, outsideFadeProgress);
+        GLES20.glUniform1f(finalGeneratedFadeInProgressHandle, generatedProgress);
+        GLES20.glUniform1f(finalGeneratedOutsideFadeOutProgressHandle, outsideFadeOutProgress);
         // 【新增】传递两个淡出进度给 Shader
-        GLES20.glUniform1f(finalBorderFadeOutProgressHandle, borderFadeOutProgress);
-        GLES20.glUniform1f(finalGridFadeOutProgressHandle, gridFadeOutProgress);
+        GLES20.glUniform1f(finalGeneratedBorderFadeOutProgressHandle, borderFadeOutProgress);
+        GLES20.glUniform1f(finalGeneratedGridFadeOutProgressHandle, gridFadeOutProgress);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
