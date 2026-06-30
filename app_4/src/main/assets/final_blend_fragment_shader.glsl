@@ -10,6 +10,13 @@ uniform float u_generating_sweepAlpha;
 uniform float u_generating_gradientBgAlpha;
 uniform float u_generating_glowAlpha;
 uniform vec2 u_resolution;
+uniform float u_borderFadeOutProgress; // 控制虚线框消失的进度 (0.0~1.0)
+uniform float u_gridFadeOutProgress;   // 控制辅助线消失的进度 (0.0~1.0)
+
+uniform vec4 u_generatedOffset;     // x: left, y: top, z: right, w: bottom
+uniform float u_generatedProgress;  // 0.0 ~ 1.0 动画进度
+uniform float u_density;            // 屏幕密度 dp -> px
+uniform float u_outsideFadeProgress;//控制区域外图片消失的进度
 
 // 四次方缓出 (Ease-Out Quart)
 float easeOut(float x) {
@@ -89,18 +96,106 @@ vec3 drawGenerating(vec4 bitmapTex, vec3 finalColor) {
 }
 
 // 已生成 的动效
-vec3 drawGenerated(vec3 finalColor) {
-    return finalColor;
+vec4 drawGenerated(vec3 finalColor, float baseAlpha) {
+    if (u_generatedProgress <= 0.0) {
+        return vec4(finalColor, baseAlpha);
+    }
+
+    vec2 pixelCoord = v_texCoord * u_resolution;
+
+    float minX = u_generatedOffset.x;
+    float minY = u_generatedOffset.y;
+    float maxX = 1.0 - u_generatedOffset.z;
+    float maxY = 1.0 - u_generatedOffset.w;
+
+    float minPxX = minX * u_resolution.x;
+    float minPxY = minY * u_resolution.y;
+    float maxPxX = maxX * u_resolution.x;
+    float maxPxY = maxY * u_resolution.y;
+
+    float boxPxWidth = maxPxX - minPxX;
+    float boxPxHeight = maxPxY - minPxY;
+
+    bool isOutside = v_texCoord.x < minX || v_texCoord.x > maxX || v_texCoord.y < minY || v_texCoord.y > maxY;
+
+    float finalAlpha = baseAlpha;
+
+    if (isOutside) {
+            // 【优化】让原有的 27% 黑色遮罩强度也随着淡出进度同步递减，防止过渡期间出现颜色突兀
+            float maskAlpha = 0.27 * u_generatedProgress * (1.0 - u_outsideFadeProgress);
+            finalColor = mix(finalColor, vec3(0.0, 0.0, 0.0), maskAlpha);
+
+            // 随着进度将整个区域外像素的透明度匀速降至 0
+            finalAlpha = baseAlpha * (1.0 - u_outsideFadeProgress);
+
+            // 【安全防线】当进度达到或超过 1.0 时，死死锁定透明度为 0
+            if (u_outsideFadeProgress >= 1.0) {
+                finalAlpha = 0.0;
+            }
+    } else {
+        // 区域内部：逻辑保持不变
+        float borderPxWidth = 1.5 * u_density;
+        float dashLength = 8.0 * u_density;
+        float dashGap = 6.0 * u_density;
+        float dashPeriod = dashLength + dashGap;
+
+        bool isBorder = false;
+        float edgeDistance = 0.0;
+
+        if (pixelCoord.x <= minPxX + borderPxWidth) {
+            isBorder = true;
+            edgeDistance = pixelCoord.y - minPxY;
+        } else if (pixelCoord.x >= maxPxX - borderPxWidth) {
+            isBorder = true;
+            edgeDistance = pixelCoord.y - minPxY;
+        } else if (pixelCoord.y <= minPxY + borderPxWidth) {
+            isBorder = true;
+            edgeDistance = pixelCoord.x - minPxX;
+        } else if (pixelCoord.y >= maxPxY - borderPxWidth) {
+            isBorder = true;
+            edgeDistance = pixelCoord.x - minPxX;
+        }
+
+        if (isBorder) {
+            if (mod(edgeDistance, dashPeriod) < dashLength) {
+                // 【修改】原透明度上限为 0.60，乘上 (1.0 - u_borderFadeOutProgress) 让其渐渐归零
+                float borderAlpha = 0.60 * u_generatedProgress * (1.0 - u_borderFadeOutProgress);
+                finalColor = mix(finalColor, vec3(1.0, 1.0, 1.0), borderAlpha);
+            }
+        } else {
+            float gridPxWidth = 1.0 * u_density;
+            float halfGridWidth = gridPxWidth / 2.0;
+
+            float gx1 = minPxX + boxPxWidth / 3.0;
+            float gx2 = minPxX + 2.0 * boxPxWidth / 3.0;
+            float gy1 = minPxY + boxPxHeight / 3.0;
+            float gy2 = minPxY + 2.0 * boxPxHeight / 3.0;
+
+            bool isGrid = abs(pixelCoord.x - gx1) < halfGridWidth ||
+                          abs(pixelCoord.x - gx2) < halfGridWidth ||
+                          abs(pixelCoord.y - gy1) < halfGridWidth ||
+                          abs(pixelCoord.y - gy2) < halfGridWidth;
+
+            if (isGrid) {
+                // 【修改】原透明度上限为 0.27，乘上 (1.0 - u_gridFadeOutProgress) 让其渐渐归零
+                float gridAlpha = 0.27 * u_generatedProgress * (1.0 - u_gridFadeOutProgress);
+                finalColor = mix(finalColor, vec3(1.0, 1.0, 1.0), gridAlpha);
+            }
+        }
+    }
+
+    return vec4(finalColor, finalAlpha);
 }
 
 void main() {
     vec4 generatingBitmapTex = texture2D(u_generating_bitmapTexture, v_texCoord);
 
     vec3 finalColor;
-    //生成中
+    // 生成中
     finalColor = drawGenerating(generatingBitmapTex, finalColor);
-    //已生成
-    finalColor = drawGenerated(finalColor);
 
-    gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), generatingBitmapTex.a);
+    // 【修改】已生成：现在接管 Alpha 控制权
+    vec4 finalResult = drawGenerated(finalColor, generatingBitmapTex.a);
+
+    gl_FragColor = vec4(clamp(finalResult.rgb, 0.0, 1.0), finalResult.a);
 }

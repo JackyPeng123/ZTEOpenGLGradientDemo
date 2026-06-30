@@ -25,9 +25,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         GradientSurfaceView glSurfaceView = findViewById(R.id.surfaceView);
-        glSurfaceView.setRoundCorner(52f);
+//        glSurfaceView.setRoundCorner(52f);
         GradientTextureView glTextureView = findViewById(R.id.textureView);
-        glTextureView.setRoundCorner(52f);
+//        glTextureView.setRoundCorner(52f);
         renderer = glSurfaceView.getVisibility() == View.VISIBLE? glSurfaceView : glTextureView;
 
         container = findViewById(R.id.container);
@@ -51,10 +51,10 @@ public class MainActivity extends Activity {
                     handler.postDelayed(new Runnable() {
                         @Override
                         public void run() {
-                            renderer.setGeneratedPixelOffset(0.15f, 0.3f, 0.2f, 0.88f);
+                            renderer.setGeneratedPixelOffset(0.55f, 0.5f, 0.25f, 0.41f);
                             renderer.performChangeState(GradientRenderer.STATE_GENERATED);
                         }
-                    }, 6000);
+                    }, 2000);
                 }
             }, 1000);
         }

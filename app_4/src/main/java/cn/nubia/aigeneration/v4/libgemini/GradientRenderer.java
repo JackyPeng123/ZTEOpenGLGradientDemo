@@ -66,6 +66,12 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private int generatingGlowGradientBgTexHandle, generatingGlowResHandle, generatingGlowTimeHandle, generatingGlowIntensityHandle, generatingGlowRadiusHandle;
     private int finalGeneratingBitmapTextureHandle, finalGeneratingSweepTextureHandle, finalGeneratingSweepAlphaHandle, finalGeneratingGradientBgTextureHandle, finalGeneratingGradientBgAlphaHandle, finalGeneratingGlowTextureHandle, finalGeneratingGlowAlphaHandle;
     private int finalResHandle;
+    private int finalGeneratedOffsetHandle;
+    private int finalGeneratedProgressHandle;
+    private int finalDensityHandle;
+    private int finalOutsideFadeProgressHandle;
+    private int finalBorderFadeOutProgressHandle;
+    private int finalGridFadeOutProgressHandle;
 
     private float screenWidth = 1080f;
     private float screenHeight = 1920f;
@@ -153,6 +159,13 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         finalGeneratingGlowAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowAlpha");
         finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution");
 
+        finalGeneratedOffsetHandle = GLES20.glGetUniformLocation(finalProgram, "u_generatedOffset");
+        finalGeneratedProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_generatedProgress");
+        finalDensityHandle = GLES20.glGetUniformLocation(finalProgram, "u_density");
+        finalOutsideFadeProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_outsideFadeProgress");
+        finalBorderFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_borderFadeOutProgress");
+        finalGridFadeOutProgressHandle = GLES20.glGetUniformLocation(finalProgram, "u_gridFadeOutProgress");
+
         int[] textures = new int[1];
         GLES20.glGenTextures(1, textures, 0);
         mGeneratingBitmapTextureId = textures[0];
@@ -228,7 +241,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
                     if (drawW > 0 && drawH > 0) {
                         initFBOs(drawW, drawH);
                     }
-
                     // 回调通知外层 View 去主线程刷新圆角裁剪
                     if (mOnDrawRectChangedListener != null) {
                         mOnDrawRectChangedListener.onDrawRectChanged(drawX, drawY, drawW, drawH);
@@ -304,17 +316,109 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
 
-        // 1. 先把全屏画布刷成透明
         GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
 
-        // 2. 转换坐标系坐标（Android 顶端为 0，GL 底端为 0），精准锁定居中区域
-        int glDrawY = (int) screenHeight - drawY - drawH;
-        GLES20.glViewport(drawX, glDrawY, drawW, drawH);
+        float currentDrawX = drawX;
+        float currentDrawY = drawY;
+        float currentDrawW = drawW;
+        float currentDrawH = drawH;
+
+        float outsideFadeProgress = 0f; // 【新增】用于记录区域外的淡出进度
+
+        if (state == STATE_GENERATED) {
+            float timeSinceGenerated = keepSecond;
+            float zoomDelay = 0.4f + Math.max(GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP, GENERATING_GLOW_EXIT_END_TIMESTAMP);      // 400ms 等待
+            float zoomDuration = 0.25f;  // 【修改】250ms 放大动画时长
+            float fadeDelay = zoomDelay + zoomDuration; // 650ms 开始淡出
+            float fadeDuration = 0.25f;  // 【新增】250ms 区域外淡出时长
+
+            // 1. 处理缩放
+            if (timeSinceGenerated > zoomDelay) {
+                float rawProgress = Math.min(1.0f, (timeSinceGenerated - zoomDelay) / zoomDuration);
+                float curvedProgress = getCubicBezierY(rawProgress, 0.33f, 0.00f, 0.00f, 1.00f);
+
+                float subW_norm = Math.max(0.01f, 1.0f - generatedPixelOffset[0] - generatedPixelOffset[2]);
+                float subH_norm = Math.max(0.01f, 1.0f - generatedPixelOffset[1] - generatedPixelOffset[3]);
+
+                float startSubW = drawW * subW_norm;
+                float startSubH = drawH * subH_norm;
+
+                float scaleX = screenWidth / startSubW;
+                float scaleY = screenHeight / startSubH;
+                float finalScale = Math.min(scaleX, scaleY);
+
+                float targetDrawW = drawW * finalScale;
+                float targetDrawH = drawH * finalScale;
+
+                float subCenterX_rel = targetDrawW * (generatedPixelOffset[0] + subW_norm / 2.0f);
+                float subCenterY_rel = targetDrawH * (generatedPixelOffset[1] + subH_norm / 2.0f);
+
+                float targetDrawX = (screenWidth / 2.0f) - subCenterX_rel;
+                float targetDrawY = (screenHeight / 2.0f) - subCenterY_rel;
+
+                currentDrawX = drawX + (targetDrawX - drawX) * curvedProgress;
+                currentDrawY = drawY + (targetDrawY - drawY) * curvedProgress;
+                currentDrawW = drawW + (targetDrawW - drawW) * curvedProgress;
+                currentDrawH = drawH + (targetDrawH - drawH) * curvedProgress;
+            }
+
+            // 2. 【新增】处理区域外淡出
+            if (timeSinceGenerated > fadeDelay) {
+                outsideFadeProgress = Math.min(1.0f, (timeSinceGenerated - fadeDelay) / fadeDuration);
+            }
+        }
+
+        // 视口及Uniform传值
+        int glDrawY = (int) screenHeight - (int) currentDrawY - (int) currentDrawH;
+        GLES20.glViewport((int) currentDrawX, glDrawY, (int) currentDrawW, (int) currentDrawH);
+
+        // =================【核心修复：显式开启 Alpha 混合模式】=================
+        GLES20.glEnable(GLES20.GL_BLEND);
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
+        // ===================================================================
 
         GLES20.glUseProgram(finalProgram);
-        GLES20.glUniform2f(finalResHandle, (float) drawW, (float) drawH);
+        GLES20.glUniform2f(finalResHandle, currentDrawW, currentDrawH);
+
+        float density = ApplicationContext.getContext().getResources().getDisplayMetrics().density;
+        GLES20.glUniform1f(finalDensityHandle, density);
+        GLES20.glUniform4f(finalGeneratedOffsetHandle, generatedPixelOffset[0], generatedPixelOffset[1], generatedPixelOffset[2], generatedPixelOffset[3]);
+
+        float generatedProgress = 0f;
+        float borderFadeOutProgress = 0f; // 【新增】虚线框淡出进度
+        float gridFadeOutProgress = 0f;   // 【新增】辅助线淡出进度
+
+        if (state == STATE_GENERATED) {
+            float timeSinceGenerated = keepSecond;
+
+            // 原有的入场渐隐逻辑保持不变
+            float zoomDelay = Math.max(GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP, GENERATING_GLOW_EXIT_END_TIMESTAMP);
+            if (timeSinceGenerated > zoomDelay) {
+                generatedProgress = Math.min(1.0f, (timeSinceGenerated - zoomDelay) / 0.25f);
+            }
+
+            // 【新增】1. 虚线框：525ms 后开始，持续 125ms
+            float borderFadeDelay = Math.max(GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP, GENERATING_GLOW_EXIT_END_TIMESTAMP) + 0.525f;
+            float borderFadeDuration = 0.125f;
+            if (timeSinceGenerated > borderFadeDelay) {
+                borderFadeOutProgress = Math.min(1.0f, (timeSinceGenerated - borderFadeDelay) / borderFadeDuration);
+            }
+
+            // 【新增】2. 辅助线：800ms 后开始，持续 250ms
+            float gridFadeDelay = Math.max(GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP, GENERATING_GLOW_EXIT_END_TIMESTAMP) + 0.800f;
+            float gridFadeDuration = 0.250f;
+            if (timeSinceGenerated > gridFadeDelay) {
+                gridFadeOutProgress = Math.min(1.0f, (timeSinceGenerated - gridFadeDelay) / gridFadeDuration);
+            }
+        }
+
+        GLES20.glUniform1f(finalGeneratedProgressHandle, generatedProgress);
+        GLES20.glUniform1f(finalOutsideFadeProgressHandle, outsideFadeProgress);
+        // 【新增】传递两个淡出进度给 Shader
+        GLES20.glUniform1f(finalBorderFadeOutProgressHandle, borderFadeOutProgress);
+        GLES20.glUniform1f(finalGridFadeOutProgressHandle, gridFadeOutProgress);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
@@ -335,7 +439,12 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         GLES20.glUniform1i(finalGeneratingGlowTextureHandle, 3);
         GLES20.glUniform1f(finalGeneratingGlowAlphaHandle, getGlowAlpha(state, keepSecond));
 
+        // 执行绘制
         drawQuad(GLES20.glGetAttribLocation(finalProgram, "a_position"), GLES20.glGetAttribLocation(finalProgram, "a_texCoord"));
+
+        // =================【修复结束：绘制完后关闭混合，恢复现场】=================
+        GLES20.glDisable(GLES20.GL_BLEND);
+        // ===================================================================
     }
 
     private float getSweepAlpha(int state, float time) {
@@ -406,6 +515,36 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
             }
         }
         return alpha;
+    }
+
+    /**
+     * 根据时间进度(0~1)计算三阶贝塞尔曲线的 Y 值
+     * 参数对应 CSS 的 cubic-bezier(x1, y1, x2, y2)
+     */
+    private float getCubicBezierY(float time, float x1, float y1, float x2, float y2) {
+        if (time <= 0f) return 0f;
+        if (time >= 1f) return 1f;
+
+        float lower = 0f;
+        float upper = 1f;
+        float t = time;
+        // 12次迭代精度达到 1/4096，对于60fps/120fps动画足够平滑
+        for (int i = 0; i < 12; i++) {
+            float currentX = evaluateCubic(x1, x2, t);
+            if (Math.abs(time - currentX) < 0.001f) break;
+            if (time > currentX) {
+                lower = t;
+            } else {
+                upper = t;
+            }
+            t = (upper + lower) / 2f;
+        }
+        return evaluateCubic(y1, y2, t);
+    }
+
+    private float evaluateCubic(float p1, float p2, float t) {
+        float mt = 1f - t;
+        return 3f * mt * mt * t * p1 + 3f * mt * t * t * p2 + t * t * t;
     }
 
     public void performChangeState(@State int state) {

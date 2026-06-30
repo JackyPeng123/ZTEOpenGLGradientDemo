@@ -13,7 +13,7 @@ import android.view.ViewOutlineProvider;
 import androidx.annotation.NonNull;
 
 public class GradientSurfaceView extends GLSurfaceView implements Renderer {
-    private Renderer renderer;
+    private Renderer renderer = new GradientRenderer();
 
     // 【新增】暂存圆角参数与当前计算出来的绘制区间
     private float mCornerRadius = 0f;
@@ -34,10 +34,25 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
         setEGLConfigChooser(8, 8, 8, 8, 16, 0);
         getHolder().setFormat(PixelFormat.TRANSLUCENT);
 
-        Renderer customRenderer = getRenderer();
+        setRenderer(renderer);
+        setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
+        getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(@NonNull SurfaceHolder holder) {}
+
+            @Override
+            public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {}
+
+            @Override
+            public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+                if (renderer != null && renderer instanceof GradientRenderer) {
+                    ((GradientRenderer)renderer).onDestroy();
+                }
+            }
+        });
         // 【修改】在此处直接捕获并关联 Renderer 抛出的坐标变换事件
-        if (customRenderer instanceof GradientRenderer) {
-            ((GradientRenderer) customRenderer).setOnDrawRectChangedListener(new GradientRenderer.OnDrawRectChangedListener() {
+        if (renderer != null && renderer instanceof GradientRenderer) {
+            ((GradientRenderer) renderer).setOnDrawRectChangedListener(new GradientRenderer.OnDrawRectChangedListener() {
                 @Override
                 public void onDrawRectChanged(final int left, final int top, final int width, final int height) {
                     // 确保切回 UI 主线程安全设置圆角
@@ -54,28 +69,7 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
                 }
             });
         }
-
-        setRenderer(this.renderer = customRenderer);
-        setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
-        getHolder().addCallback(new SurfaceHolder.Callback() {
-            @Override
-            public void surfaceCreated(@NonNull SurfaceHolder holder) {}
-
-            @Override
-            public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {}
-
-            @Override
-            public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
-                if (renderer != null && renderer instanceof GradientRenderer) {
-                    ((GradientRenderer)renderer).onDestroy();
-                }
-            }
-        });
         pause();
-    }
-
-    protected Renderer getRenderer() {
-        return new GradientRenderer();
     }
 
     @Override

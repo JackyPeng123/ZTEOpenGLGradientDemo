@@ -28,18 +28,42 @@ public class GradientTextureView extends TextureView implements Renderer {
     // 【核心修复点】：缓存用户真实的生命周期意图（默认用户希望对齐 Activity 自动运行）
     private boolean mUserWantToRun = true;
 
+    // 【新增】暂存圆角参数与当前计算出来的绘制区间
+    private float mCornerRadius = 0f;
+    private int mDrawLeft, mDrawTop, mDrawWidth, mDrawHeight;
+
     public GradientTextureView(@NonNull Context context) { super(context); init(); }
     public GradientTextureView(@NonNull Context context, @Nullable AttributeSet attrs) { super(context, attrs); init(); }
     public GradientTextureView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr) { super(context, attrs, defStyleAttr); init(); }
     public GradientTextureView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr, int defStyleRes) { super(context, attrs, defStyleAttr, defStyleRes); init(); }
 
     private void init() {
+        renderThread = new GLRenderThread();
         setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
                 // 每次可用时创建新线程，并将当前的生命周期意图 mUserWantToRun 传递进去
-                renderThread = new GLRenderThread(surface, getRenderer(), width, height, mUserWantToRun);
+                renderThread.init(surface, width, height, mUserWantToRun);
                 renderThread.start();
+                // 【修改】在此处直接捕获并关联 Renderer 抛出的坐标变换事件
+                if (renderThread.renderer instanceof GradientRenderer) {
+                    ((GradientRenderer) renderThread.renderer).setOnDrawRectChangedListener(new GradientRenderer.OnDrawRectChangedListener() {
+                        @Override
+                        public void onDrawRectChanged(final int left, final int top, final int width, final int height) {
+                            // 确保切回 UI 主线程安全设置圆角
+                            post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    mDrawLeft = left;
+                                    mDrawTop = top;
+                                    mDrawWidth = width;
+                                    mDrawHeight = height;
+                                    applyRoundCornerInternal();
+                                }
+                            });
+                        }
+                    });
+                }
             }
 
             @Override
@@ -61,10 +85,6 @@ public class GradientTextureView extends TextureView implements Renderer {
             @Override
             public void onSurfaceTextureUpdated(SurfaceTexture surface) {}
         });
-    }
-
-    protected GLSurfaceView.Renderer getRenderer() {
-        return new GradientRenderer();
     }
 
     @Override
@@ -89,17 +109,31 @@ public class GradientTextureView extends TextureView implements Renderer {
 
     @Override
     public void setRoundCorner(float radius) {
-        setOutlineProvider(new ViewOutlineProvider() {
+        this.mCornerRadius = radius;
+        post(new Runnable() {
             @Override
-            public void getOutline(View view, Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+            public void run() {
+                applyRoundCornerInternal();
             }
         });
-        setClipToOutline(true);
+    }
+
+    // 【新增】合并刷新圆角，将边缘完美贴合在图片居中边缘
+    private void applyRoundCornerInternal() {
+        if (mCornerRadius > 0 && mDrawWidth > 0 && mDrawHeight > 0) {
+            setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(mDrawLeft, mDrawTop, mDrawLeft + mDrawWidth, mDrawTop + mDrawHeight, mCornerRadius);
+                }
+            });
+            setClipToOutline(true);
+        }
     }
 
     @Override
     public void setGeneratingBitmap(Bitmap bitmap) {
+        Log.i("TAG", "=========setGeneratingBitmap: " + bitmap);
         if (renderThread != null) {
             renderThread.queueEvent(() -> renderThread.setGeneratingBitmap(bitmap));
         }
@@ -123,8 +157,8 @@ public class GradientTextureView extends TextureView implements Renderer {
      * 优化后的渲染线程
      */
     private static class GLRenderThread extends Thread {
-        private final GLSurfaceView.Renderer renderer;
-        private final SurfaceTexture surfaceTexture;
+        private final GLSurfaceView.Renderer renderer = new GradientRenderer();
+        private SurfaceTexture surfaceTexture;
         private int width;
         private int height;
 
@@ -140,9 +174,8 @@ public class GradientTextureView extends TextureView implements Renderer {
         private EGLSurface eglSurface = EGL14.EGL_NO_SURFACE;
 
         // 【核心修复点】：构造函数接收初始暂停状态
-        public GLRenderThread(SurfaceTexture surfaceTexture, GLSurfaceView.Renderer renderer, int width, int height, boolean startImmediately) {
+        private void init(SurfaceTexture surfaceTexture, int width, int height, boolean startImmediately) {
             this.surfaceTexture = surfaceTexture;
-            this.renderer = renderer;
             this.width = width;
             this.height = height;
             // 如果用户希望运行，则不暂停(!startImmediately)
