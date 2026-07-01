@@ -6,3 +6,5 @@ include ':app_2'
 include ':app_3'
 //辅助构图的动效
 include ':app_4'
+//AI扩图的动效
+include ':app_5'
