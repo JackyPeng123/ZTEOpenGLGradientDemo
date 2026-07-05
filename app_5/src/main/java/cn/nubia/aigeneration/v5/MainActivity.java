@@ -39,22 +39,22 @@ public class MainActivity extends Activity {
         if (renderer != null) {
             Bitmap bitmap = ((BitmapDrawable)(imageView.getDrawable())).getBitmap();
             if (renderer != null) {
-                renderer.setGeneratingBitmap(bitmap);
+                renderer.setGeneratingBitmap(bitmap, 100f, 0, 600f, 0);
             }
-            Handler handler = new Handler();
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    renderer.performChangeState(GradientRenderer.STATE_GENERATING);
-                    handler.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            renderer.setGeneratedPixelOffset(0.55f, 0.5f, 0.25f, 0.41f);
-                            renderer.performChangeState(GradientRenderer.STATE_GENERATED);
-                        }
-                    }, 2000);
-                }
-            }, 1000);
+//            Handler handler = new Handler();
+//            handler.postDelayed(new Runnable() {
+//                @Override
+//                public void run() {
+//                    renderer.performChangeState(GradientRenderer.STATE_GENERATING);
+//                    handler.postDelayed(new Runnable() {
+//                        @Override
+//                        public void run() {
+//                            renderer.setGeneratedBitmap(0.55f, 0.5f, 0.25f, 0.41f);
+//                            renderer.performChangeState(GradientRenderer.STATE_GENERATED);
+//                        }
+//                    }, 2000);
+//                }
+//            }, 1000);
         }
     }
 

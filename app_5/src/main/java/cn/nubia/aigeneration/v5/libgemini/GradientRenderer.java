@@ -32,39 +32,32 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private static final float GENERATING_SWEEP_END_TIMESTAMP = GENERATING_SWEEP_START_TIMESTAMP + 0.6f;
     private static final float GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP = 0.25f;
     private static final float GENERATING_GRADIENT_BG_ENTER_END_TIMESTAMP = GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP + 0.5f;
-    private static final float GENERATING_GLOW_ENTER_START_TIMESTAMP = 0.5f;
-    private static final float GENERATING_GLOW_ENTER_END_TIMESTAMP = GENERATING_GLOW_ENTER_START_TIMESTAMP + 0.3f;
 
     private static final float GENERATING_GRADIENT_BG_EXIT_START_TIMESTAMP = 0f;
     private static final float GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP = GENERATING_GRADIENT_BG_EXIT_START_TIMESTAMP + 0.15f;
-    private static final float GENERATING_GLOW_EXIT_START_TIMESTAMP = 0f;
-    private static final float GENERATING_GLOW_EXIT_END_TIMESTAMP = GENERATING_GLOW_EXIT_START_TIMESTAMP + 0.15f;
 
     private volatile @State int state = STATE_IDEL, stateTemp = STATE_IDEL;
 
     private int generatingSweepProgram = 0;
     private int generatingGradientBgProgram = 0;
-    private int generatingGlowProgram = 0;
     private int finalProgram = 0;
 
     private final String vertexShaderSource;
     private final String generatingSweepShaderSource;
     private final String generatingGradientBgShaderSource;
-    private final String generatingGlowShaderSource;
     private final String finalShaderSource;
 
     private FloatBuffer vertexBuffer;
     private FloatBuffer texCoordBuffer;
 
-    private int[] fboIds = new int[3];
-    private int[] fboTextureIds = new int[3];
+    private int[] fboIds = new int[2];
+    private int[] fboTextureIds = new int[2];
 
-    private float[] generatedPixelOffset = new float[4];
+    private float[] generatingBitmapPixelOffset = new float[4];
 
     private int generatingSweepTimeHandle, generatingSweepDurationHandler, generatingSweepResHandle;
     private int generatingGradientBgTimeHandle, generatingGradientBgResHandle;
-    private int generatingGlowGradientBgTexHandle, generatingGlowResHandle, generatingGlowTimeHandle, generatingGlowIntensityHandle, generatingGlowRadiusHandle;
-    private int finalGeneratingBitmapTextureHandle, finalGeneratingSweepTextureHandle, finalGeneratingSweepAlphaHandle, finalGeneratingGradientBgTextureHandle, finalGeneratingGradientBgAlphaHandle, finalGeneratingGlowTextureHandle, finalGeneratingGlowAlphaHandle;
+    private int finalGeneratingBitmapTextureHandle, finalGeneratingSweepTextureHandle, finalGeneratingSweepAlphaHandle, finalGeneratingGradientBgTextureHandle, finalGeneratingGradientBgAlphaHandle;
     private int finalResHandle;
 
     private float screenWidth = 1080f;
@@ -90,7 +83,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private int mGeneratingBitmapTextureId = -1;
 
     private float exitStartGradientBgAlpha = 0f;
-    private float exitStartGlowAlpha = 0f;
 
     private final float[] vertices = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
     private final float[] texCoords = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
@@ -104,24 +96,24 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         vertexShaderSource = loadShaderFast("vertex_shader.glsl");
         generatingSweepShaderSource = loadShaderFast("generating_sweep_light_fragment_shader.glsl");
         generatingGradientBgShaderSource = loadShaderFast("generating_gradient_background_fragment_shader.glsl");
-        generatingGlowShaderSource = loadShaderFast("generating_glow_edge_fragment_shader.glsl");
         finalShaderSource = loadShaderFast("final_blend_fragment_shader.glsl");
     }
 
-    public void setGeneratingBitmap(Bitmap bitmap) {
+    public void setGeneratingBitmap(Bitmap bitmap, float left, float top, float right, float bottom) {
         synchronized (this) {
             this.mGeneratingBitmap = bitmap;
+            this.generatingBitmapPixelOffset[0] = left;
+            this.generatingBitmapPixelOffset[1] = top;
+            this.generatingBitmapPixelOffset[2] = right;
+            this.generatingBitmapPixelOffset[3] = bottom;
             this.mGeneratingBitmapChanged = true;
             this.mSizeChanged = true; // 【修改】传入图片时触发重新计算区域
         }
     }
 
-    public void setGeneratedPixelOffset(float left, float top, float right, float bottom) {
+    public void setGeneratedBitmap(Bitmap bitmap) {
         synchronized (this) {
-            this.generatedPixelOffset[0] = left;
-            this.generatedPixelOffset[1] = top;
-            this.generatedPixelOffset[2] = right;
-            this.generatedPixelOffset[3] = bottom;
+            this.mSizeChanged = true;
         }
     }
 
@@ -136,21 +128,12 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         generatingGradientBgTimeHandle = GLES20.glGetUniformLocation(generatingGradientBgProgram, "u_time");
         generatingGradientBgResHandle = GLES20.glGetUniformLocation(generatingGradientBgProgram, "u_resolution");
 
-        generatingGlowProgram = createGLProgram(vertexShaderSource, generatingGlowShaderSource);
-        generatingGlowGradientBgTexHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_gradientBgTexture");
-        generatingGlowResHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_resolution");
-        generatingGlowTimeHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_time");
-        generatingGlowIntensityHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_glowIntensity");
-        generatingGlowRadiusHandle = GLES20.glGetUniformLocation(generatingGlowProgram, "u_glowRadius");
-
         finalProgram = createGLProgram(vertexShaderSource, finalShaderSource);
         finalGeneratingBitmapTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_bitmapTexture");
         finalGeneratingSweepTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_sweepTexture");
         finalGeneratingSweepAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_sweepAlpha");
         finalGeneratingGradientBgTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_gradientBgTexture");
         finalGeneratingGradientBgAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_gradientBgAlpha");
-        finalGeneratingGlowTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowTexture");
-        finalGeneratingGlowAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_glowAlpha");
         finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution");
 
         int[] textures = new int[1];
@@ -174,10 +157,10 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     }
 
     private void initFBOs(int width, int height) {
-        GLES20.glGenTextures(3, fboTextureIds, 0);
-        GLES20.glGenFramebuffers(3, fboIds, 0);
+        GLES20.glGenTextures(2, fboTextureIds, 0);
+        GLES20.glGenFramebuffers(2, fboIds, 0);
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[i]);
             GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, width, height, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
@@ -195,50 +178,70 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     @Override
     public void onDrawFrame(GL10 gl) {
         // 【修改】核心自适应逻辑：动态按 fitCenter 计算最终的 drawRect
+        // ==================== 修改前的代码片段 ====================
+/*
+float containerRatio = screenWidth / screenHeight;
+// ... (省略中间代码)
+int newDrawX = Math.round((screenWidth - targetW) / 2f);
+int newDrawY = Math.round((screenHeight - targetH) / 2f);
+*/
+
+// ==================== 修改后的代码 ====================
         synchronized (this) {
             if (mSizeChanged && mGeneratingBitmap != null && screenWidth > 0 && screenHeight > 0) {
                 int bitmapW = mGeneratingBitmap.getWidth();
                 int bitmapH = mGeneratingBitmap.getHeight();
 
-                float containerRatio = screenWidth / screenHeight;
-                float bitmapRatio = (float) bitmapW / bitmapH;
-                float targetW, targetH;
+                // 1. 获取传入的边距。兼容你之前传入 0.1f(百分比) 或者 100f(像素) 的情况
+                float padLeft = generatingBitmapPixelOffset[0];
+                float padTop = generatingBitmapPixelOffset[1];
+                float padRight = generatingBitmapPixelOffset[2];
+                float padBottom = generatingBitmapPixelOffset[3];
 
-                if (bitmapRatio > containerRatio) {
-                    targetW = screenWidth;
-                    targetH = screenWidth / bitmapRatio;
-                } else {
-                    targetW = screenHeight * bitmapRatio;
-                    targetH = screenHeight;
+                // 如果传入的是小于 1 的浮点数，说明是百分比，换算成像素
+                if (padLeft <= 1.0f && padRight <= 1.0f && (padLeft > 0 || padRight > 0)) {
+                    padLeft *= screenWidth;
+                    padRight *= screenWidth;
+                    padTop *= screenHeight;
+                    padBottom *= screenHeight;
                 }
 
-                int newDrawX = Math.round((screenWidth - targetW) / 2f);
-                int newDrawY = Math.round((screenHeight - targetH) / 2f);
-                int newDrawW = Math.round(targetW);
-                int newDrawH = Math.round(targetH);
+                // 2. 减去边距，计算实际可以在屏幕上绘制的"可用宽/高"
+                float availableW = screenWidth - padLeft - padRight;
+                float availableH = screenHeight - padTop - padBottom;
 
-                if (newDrawX != drawX || newDrawY != drawY || newDrawW != drawW || newDrawH != drawH) {
-                    this.drawX = newDrawX;
-                    this.drawY = newDrawY;
-                    this.drawW = newDrawW;
-                    this.drawH = newDrawH;
+                if (availableW > 0 && availableH > 0) {
+                    float targetW = availableW;
+                    float targetH = availableH;
 
-                    // 仅在真实渲染区间确定后重建刚好匹配大小的 FBO 节省内存
-                    deleteFBOs();
-                    if (drawW > 0 && drawH > 0) {
-                        initFBOs(drawW, drawH);
-                    }
+                    // 4. 核心：左上角对齐！
+                    // X 起点就是左边距，Y 起点就是顶边距 (如果不要求左上角而是居中，这里就是 pad + (available - target)/2 )
+                    int newDrawX = Math.round(padLeft);
+                    int newDrawY = Math.round(padTop);
+                    int newDrawW = Math.round(targetW);
+                    int newDrawH = Math.round(targetH);
 
-                    // 回调通知外层 View 去主线程刷新圆角裁剪
-                    if (mOnDrawRectChangedListener != null) {
-                        mOnDrawRectChangedListener.onDrawRectChanged(drawX, drawY, drawW, drawH);
+                    if (newDrawX != drawX || newDrawY != drawY || newDrawW != drawW || newDrawH != drawH) {
+                        this.drawX = newDrawX;
+                        this.drawY = newDrawY;
+                        this.drawW = newDrawW;
+                        this.drawH = newDrawH;
+
+                        deleteFBOs();
+                        if (drawW > 0 && drawH > 0) {
+                            initFBOs(drawW, drawH);
+                        }
+
+                        if (mOnDrawRectChangedListener != null) {
+                            mOnDrawRectChangedListener.onDrawRectChanged(drawX, drawY, drawW, drawH);
+                        }
                     }
                 }
                 mSizeChanged = false;
             }
         }
 
-        if (generatingSweepProgram == 0 || generatingGradientBgProgram == 0 || generatingGlowProgram == 0 || finalProgram == 0 || drawW == 0 || drawH == 0 || fboIds[0] == 0) return;
+        if (generatingSweepProgram == 0 || generatingGradientBgProgram == 0 || finalProgram == 0 || drawW == 0 || drawH == 0 || fboIds[0] == 0) return;
 
         synchronized (this) {
             if (mGeneratingBitmapChanged && mGeneratingBitmap != null) {
@@ -282,24 +285,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         drawQuad(GLES20.glGetAttribLocation(generatingGradientBgProgram, "a_position"), GLES20.glGetAttribLocation(generatingGradientBgProgram, "a_texCoord"));
 
         // ==========================================
-        // PASS 2：查找边缘 -> 视口完全匹配图片实际尺寸 drawW, drawH
-        // ==========================================
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[2]);
-        GLES20.glViewport(0, 0, drawW, drawH);
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-
-        GLES20.glUseProgram(generatingGlowProgram);
-        GLES20.glUniform2f(generatingGlowResHandle, (float) drawW, (float) drawH);
-        GLES20.glUniform1f(generatingGlowTimeHandle, keepSecond - GENERATING_GLOW_ENTER_START_TIMESTAMP);
-        GLES20.glUniform1f(generatingGlowIntensityHandle, 3.0f);
-        GLES20.glUniform1f(generatingGlowRadiusHandle, 4.0f);
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
-        GLES20.glUniform1i(generatingGlowGradientBgTexHandle, 0);
-        drawQuad(GLES20.glGetAttribLocation(generatingGlowProgram, "a_position"), GLES20.glGetAttribLocation(generatingGlowProgram, "a_texCoord"));
-
-        // ==========================================
         // PASS 3：最终合成 -> 映射居中到全屏窗口上
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
@@ -329,11 +314,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[1]);
         GLES20.glUniform1i(finalGeneratingGradientBgTextureHandle, 2);
         GLES20.glUniform1f(finalGeneratingGradientBgAlphaHandle, getGradientBgAlpha(state, keepSecond));
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE3);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureIds[2]);
-        GLES20.glUniform1i(finalGeneratingGlowTextureHandle, 3);
-        GLES20.glUniform1f(finalGeneratingGlowAlphaHandle, getGlowAlpha(state, keepSecond));
 
         drawQuad(GLES20.glGetAttribLocation(finalProgram, "a_position"), GLES20.glGetAttribLocation(finalProgram, "a_texCoord"));
     }
@@ -378,31 +358,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
             } else {
                 float exitDuration = GENERATING_GRADIENT_BG_EXIT_END_TIMESTAMP - GENERATING_GRADIENT_BG_EXIT_START_TIMESTAMP;
                 alpha = Math.max(0f, exitStartGradientBgAlpha * (1.0f - (time - GENERATING_GRADIENT_BG_EXIT_START_TIMESTAMP) / exitDuration));
-            }
-        }
-        return alpha;
-    }
-
-    private float getGlowAlpha(int state, float time) {
-        float alpha = 0f;
-        if (state == STATE_GENERATING) {
-            if (time < GENERATING_GLOW_ENTER_START_TIMESTAMP) {
-                alpha = 0f;
-            } else if (time > GENERATING_GLOW_ENTER_END_TIMESTAMP) {
-                alpha = 0.3f;
-            } else {
-                float enterDuration = GENERATING_GLOW_ENTER_END_TIMESTAMP - GENERATING_GLOW_ENTER_START_TIMESTAMP;
-                alpha = Math.min(0.3f, 0.3f * ((time - GENERATING_GLOW_ENTER_START_TIMESTAMP) / enterDuration));
-            }
-            exitStartGlowAlpha = alpha;
-        } else if (state == STATE_GENERATED) {
-            if (time < GENERATING_GLOW_EXIT_START_TIMESTAMP) {
-                alpha = exitStartGlowAlpha;
-            } else if (time > GENERATING_GLOW_EXIT_END_TIMESTAMP) {
-                alpha = exitStartGlowAlpha = 0f;
-            } else {
-                float exitDuration = GENERATING_GLOW_EXIT_END_TIMESTAMP - GENERATING_GLOW_EXIT_START_TIMESTAMP;
-                alpha = Math.max(0f, exitStartGlowAlpha * (1.0f - (time - GENERATING_GLOW_EXIT_START_TIMESTAMP) / exitDuration));
             }
         }
         return alpha;
@@ -456,12 +411,12 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
 
     private void deleteFBOs() {
         if (fboIds[0] != 0) {
-            GLES20.glDeleteFramebuffers(3, fboIds, 0);
-            for (int i = 0; i < 3; i++) fboIds[i] = 0;
+            GLES20.glDeleteFramebuffers(2, fboIds, 0);
+            for (int i = 0; i < 2; i++) fboIds[i] = 0;
         }
         if (fboTextureIds[0] != 0) {
-            GLES20.glDeleteTextures(3, fboTextureIds, 0);
-            for (int i = 0; i < 3; i++) fboTextureIds[i] = 0;
+            GLES20.glDeleteTextures(2, fboTextureIds, 0);
+            for (int i = 0; i < 2; i++) fboTextureIds[i] = 0;
         }
     }
 
@@ -492,7 +447,6 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         deleteFBOs();
         if (generatingSweepProgram != 0) GLES20.glDeleteProgram(generatingSweepProgram);
         if (generatingGradientBgProgram != 0) GLES20.glDeleteProgram(generatingGradientBgProgram);
-        if (generatingGlowProgram != 0) GLES20.glDeleteProgram(generatingGlowProgram);
         if (mGeneratingBitmapTextureId != -1) GLES20.glDeleteTextures(1, new int[]{mGeneratingBitmapTextureId}, 0);
         if (finalProgram != 0) GLES20.glDeleteProgram(finalProgram);
     }

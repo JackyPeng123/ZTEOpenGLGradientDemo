@@ -2,13 +2,12 @@ precision highp float;
 
 varying vec2 v_texCoord;
 uniform sampler2D u_generating_bitmapTexture;
+uniform vec4 u_generating_bitmapOffsetPercent;
 uniform sampler2D u_generating_sweepTexture;
 uniform sampler2D u_generating_gradientBgTexture;
-uniform sampler2D u_generating_glowTexture;
 
 uniform float u_generating_sweepAlpha;
 uniform float u_generating_gradientBgAlpha;
-uniform float u_generating_glowAlpha;
 uniform vec2 u_resolution;
 
 // 四次方缓出 (Ease-Out Quart)
@@ -61,15 +60,10 @@ vec3 shiftHue(vec3 color, float shiftDegrees) {
 vec3 drawGenerating(vec4 bitmapTex, vec3 finalColor) {
     vec4 sweepTex = texture2D(u_generating_sweepTexture, v_texCoord);
     vec4 gradientBgTex = texture2D(u_generating_gradientBgTexture, v_texCoord);
-    vec4 glowTex = texture2D(u_generating_glowTexture, v_texCoord);
 
     //绘制渐变背景
     vec3 blendedRGB = blendHardLight(bitmapTex.rgb, gradientBgTex.rgb);
     vec3 finalColor = mix(bitmapTex.rgb, blendedRGB, u_generating_gradientBgAlpha);
-
-    //绘制边缘发光
-    vec3 glowColor = vec3(1.0) * glowTex.r * 1.0 * u_generating_glowAlpha;
-    finalColor = finalColor + glowColor;
 
     //绘制入场扫光
     if (u_generating_sweepAlpha > 0.0) {
@@ -94,12 +88,30 @@ vec3 drawGenerated(vec3 finalColor) {
 }
 
 void main() {
-    vec4 generatingBitmapTex = texture2D(u_generating_bitmapTexture, v_texCoord);
+    // 1. 计算映射后的 UV 坐标
+    // 原始 v_texCoord 的范围是 [0, 1]
+    // 我们需要将有效区域缩放到 (1.0 - left - right) 和 (1.0 - top - bottom)
+    vec2 mappedUV = v_texCoord;
+    float validWidth = max(0.001, 1.0);
+    float validHeight = max(0.001, 1.0);
 
-    vec3 finalColor;
-    //生成中
+    mappedUV.x = v_texCoord.x / validWidth;
+    mappedUV.y = v_texCoord.y / validHeight;
+
+    // 2. 读取 Bitmap 色值并处理边界
+    vec4 generatingBitmapTex;
+    if (mappedUV.x < 0.0 || mappedUV.x > 1.0 || mappedUV.y < 0.0 || mappedUV.y > 1.0) {
+        // 超出间距范围的部分处理为透明
+        generatingBitmapTex = vec4(0.0);
+    } else {
+        // 在间距范围内的正常采样
+        generatingBitmapTex = texture2D(u_generating_bitmapTexture, mappedUV);
+    }
+
+    vec3 finalColor = vec3(0.0);
+    // 生成中
     finalColor = drawGenerating(generatingBitmapTex, finalColor);
-    //已生成
+    // 已生成
     finalColor = drawGenerated(finalColor);
 
     gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), generatingBitmapTex.a);

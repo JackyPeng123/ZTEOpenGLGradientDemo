@@ -107,17 +107,17 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
     }
 
     @Override
-    public void setGeneratingBitmap(Bitmap bitmap) {
+    public void setGeneratingBitmap(Bitmap bitmap, float left, float top, float right, float bottom) {
         if (renderer != null && renderer instanceof GradientRenderer) {
-            ((GradientRenderer)renderer).setGeneratingBitmap(bitmap);
+            ((GradientRenderer)renderer).setGeneratingBitmap(bitmap, left, top, right, bottom);
         }
         requestRender();
     }
 
     @Override
-    public void setGeneratedPixelOffset(float left, float top, float right, float bottom) {
+    public void setGeneratedBitmap(Bitmap bitmap) {
         if (renderer != null && renderer instanceof GradientRenderer) {
-            ((GradientRenderer)renderer).setGeneratedPixelOffset(left, top, right, bottom);
+            ((GradientRenderer)renderer).setGeneratedBitmap(bitmap);
         }
         requestRender();
     }

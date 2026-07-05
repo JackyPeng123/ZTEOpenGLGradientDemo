@@ -22,12 +22,12 @@ public interface Renderer {
     /**
      * 【生成中】的图片
      */
-    void setGeneratingBitmap(Bitmap bitmap);
+    void setGeneratingBitmap(Bitmap bitmap, float left, float top, float right, float bottom);
 
     /**
      * 【已生成】的图片位于【生成中】图片的左上右下间距
      */
-    void setGeneratedPixelOffset(float left, float top, float right, float bottom);
+    void setGeneratedBitmap(Bitmap bitmap);
 
     /**
      * 变更状态
