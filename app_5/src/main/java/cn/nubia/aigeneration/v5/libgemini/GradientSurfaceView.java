@@ -30,6 +30,7 @@ public class GradientSurfaceView extends GLSurfaceView implements Renderer {
     }
 
     private void init() {
+        setZOrderOnTop(true);
         setEGLContextClientVersion(2);
         setEGLConfigChooser(8, 8, 8, 8, 16, 0);
         getHolder().setFormat(PixelFormat.TRANSLUCENT);

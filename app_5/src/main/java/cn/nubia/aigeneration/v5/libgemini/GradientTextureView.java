@@ -38,6 +38,8 @@ public class GradientTextureView extends TextureView implements Renderer {
     public GradientTextureView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr, int defStyleRes) { super(context, attrs, defStyleAttr, defStyleRes); init(); }
 
     private void init() {
+        //关闭 TextureView 的默认不透明行为，允许透出底部控件
+        setOpaque(false);
         renderThread = new GLRenderThread();
         setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override

@@ -5,24 +5,22 @@
     android:orientation="vertical"
     android:id="@+id/container">
 
-    <ImageView android:id="@+id/imageView"
+    <cn.nubia.aigeneration.v5.CheckerboardView
+        android:id="@+id/imageView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:src="@mipmap/bg2"
-        android:scaleType="fitCenter"
-        android:visibility="gone"/>
+        android:layout_height="match_parent"/>
 
     <cn.nubia.aigeneration.v5.libgemini.GradientSurfaceView
         android:id="@+id/surfaceView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="center"/>
+        android:layout_gravity="center"
+        android:visibility="gone" />
 
     <cn.nubia.aigeneration.v5.libgemini.GradientTextureView
         android:id="@+id/textureView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="center"
-        android:visibility="gone" />
+        android:layout_gravity="center"/>
 
 </FrameLayout>

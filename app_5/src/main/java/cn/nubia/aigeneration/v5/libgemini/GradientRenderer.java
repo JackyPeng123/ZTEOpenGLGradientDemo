@@ -58,7 +58,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
     private int generatingSweepTimeHandle, generatingSweepDurationHandler, generatingSweepResHandle;
     private int generatingGradientBgTimeHandle, generatingGradientBgResHandle;
     private int finalGeneratingBitmapTextureHandle, finalGeneratingSweepTextureHandle, finalGeneratingSweepAlphaHandle, finalGeneratingGradientBgTextureHandle, finalGeneratingGradientBgAlphaHandle;
-    private int finalResHandle;
+    private int finalResHandle, finalGeneratingBitmapRectHandle;
 
     private float screenWidth = 1080f;
     private float screenHeight = 1920f;
@@ -135,6 +135,7 @@ public class GradientRenderer implements GLSurfaceView.Renderer {
         finalGeneratingGradientBgTextureHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_gradientBgTexture");
         finalGeneratingGradientBgAlphaHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_gradientBgAlpha");
         finalResHandle = GLES20.glGetUniformLocation(finalProgram, "u_resolution");
+        finalGeneratingBitmapRectHandle = GLES20.glGetUniformLocation(finalProgram, "u_generating_bitmapRect");
 
         int[] textures = new int[1];
         GLES20.glGenTextures(1, textures, 0);
@@ -228,12 +229,13 @@ int newDrawY = Math.round((screenHeight - targetH) / 2f);
                         this.drawH = newDrawH;
 
                         deleteFBOs();
-                        if (drawW > 0 && drawH > 0) {
-                            initFBOs(drawW, drawH);
+                        if (screenWidth > 0 && screenHeight > 0) {
+                            // 【修改1】FBO 从图片尺寸放大到全屏尺寸
+                            initFBOs((int)screenWidth, (int)screenHeight);
                         }
-
                         if (mOnDrawRectChangedListener != null) {
-                            mOnDrawRectChangedListener.onDrawRectChanged(drawX, drawY, drawW, drawH);
+                            // 【修改2】动效既然全铺满，那么圆角也应作用于整个容器边缘
+                            mOnDrawRectChangedListener.onDrawRectChanged(0, 0, (int)screenWidth, (int)screenHeight);
                         }
                     }
                 }
@@ -258,49 +260,52 @@ int newDrawY = Math.round((screenHeight - targetH) / 2f);
         float keepSecond = onStateChanged();
 
         // ==========================================
-        // PASS 0：渲染扫光 -> 视口完全匹配图片实际尺寸 drawW, drawH
+        // PASS 0：渲染扫光 -> 视口匹配全屏容器
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[0]);
-        GLES20.glViewport(0, 0, drawW, drawH);
+        GLES20.glViewport(0, 0, (int)screenWidth, (int)screenHeight);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
         GLES20.glUseProgram(generatingSweepProgram);
         GLES20.glUniform1f(generatingSweepTimeHandle, keepSecond - GENERATING_SWEEP_START_TIMESTAMP);
         GLES20.glUniform1f(generatingSweepDurationHandler, GENERATING_SWEEP_END_TIMESTAMP - GENERATING_SWEEP_START_TIMESTAMP);
-        GLES20.glUniform2f(generatingSweepResHandle, (float) drawW, (float) drawH);
+        GLES20.glUniform2f(generatingSweepResHandle, screenWidth, screenHeight); // 传入全屏尺寸
         drawQuad(GLES20.glGetAttribLocation(generatingSweepProgram, "a_position"), GLES20.glGetAttribLocation(generatingSweepProgram, "a_texCoord"));
 
         // ==========================================
-        // PASS 1：渲染流体 -> 视口完全匹配图片实际尺寸 drawW, drawH
+        // PASS 1：渲染流体 -> 视口匹配全屏容器
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[1]);
-        GLES20.glViewport(0, 0, drawW, drawH);
+        GLES20.glViewport(0, 0, (int)screenWidth, (int)screenHeight);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
         GLES20.glUseProgram(generatingGradientBgProgram);
         GLES20.glUniform1f(generatingGradientBgTimeHandle, keepSecond - GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP);
-        GLES20.glUniform2f(generatingGradientBgResHandle, (float) drawW, (float) drawH);
+        GLES20.glUniform2f(generatingGradientBgResHandle, screenWidth, screenHeight); // 传入全屏尺寸
         drawQuad(GLES20.glGetAttribLocation(generatingGradientBgProgram, "a_position"), GLES20.glGetAttribLocation(generatingGradientBgProgram, "a_texCoord"));
 
         // ==========================================
-        // PASS 3：最终合成 -> 映射居中到全屏窗口上
+        // PASS 3：最终合成 -> 全屏输出到屏幕
         // ==========================================
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
 
-        // 1. 先把全屏画布刷成透明
         GLES20.glViewport(0, 0, (int) screenWidth, (int) screenHeight);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
 
-        // 2. 转换坐标系坐标（Android 顶端为 0，GL 底端为 0），精准锁定居中区域
-        int glDrawY = (int) screenHeight - drawY - drawH;
-        GLES20.glViewport(drawX, glDrawY, drawW, drawH);
-
         GLES20.glUseProgram(finalProgram);
-        GLES20.glUniform2f(finalResHandle, (float) drawW, (float) drawH);
+        GLES20.glUniform2f(finalResHandle, screenWidth, screenHeight);
 
+        // 【新增】：将 Bitmap 所在的坐标转换为 0~1 的 UV 比例，传递给 Shader
+        float minX = (float) drawX / screenWidth;
+        float maxX = (float) (drawX + drawW) / screenWidth;
+        float minY = (float) drawY / screenHeight;
+        float maxY = (float) (drawY + drawH) / screenHeight;
+        GLES20.glUniform4f(finalGeneratingBitmapRectHandle, minX, minY, maxX, maxY);
+
+        // 绑定各个纹理
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mGeneratingBitmapTextureId);
         GLES20.glUniform1i(finalGeneratingBitmapTextureHandle, 0);
@@ -344,10 +349,10 @@ int newDrawY = Math.round((screenHeight - targetH) / 2f);
                 float duration = 1.0f;
                 float progress = (time - GENERATING_GRADIENT_BG_ENTER_END_TIMESTAMP) / duration;
                 float pingpong = Math.abs((float) Math.sin(progress * Math.PI / 2.0));
-                alpha = 0.15f + (0.50f - 0.15f) * pingpong;
+                alpha = 0.25f - (0.25f - 0.1f) * pingpong;
             } else {
                 float enterDuration = GENERATING_GRADIENT_BG_ENTER_END_TIMESTAMP - GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP;
-                alpha = Math.min(0.15f, 0.15f * ((time - GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP) / enterDuration));
+                alpha = Math.min(0.25f, 0.25f * ((time - GENERATING_GRADIENT_BG_ENTER_START_TIMESTAMP) / enterDuration));
             }
             exitStartGradientBgAlpha = alpha;
         } else if (state == STATE_GENERATED) {

@@ -38,6 +38,7 @@ public class GradientTextureView extends TextureView implements Renderer {
     public GradientTextureView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr, int defStyleRes) { super(context, attrs, defStyleAttr, defStyleRes); init(); }
 
     private void init() {
+        setOpaque(false);
         renderThread = new GLRenderThread();
         setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
